@@ -166,53 +166,29 @@ AUTOMATED_CHECKS.general.push(
   rule("general-announcement-bar", "Announcement or promo bar is visible", 2, "pro", ({ doc, text }) => !!doc.querySelector('[class*="announce" i], [class*="promo" i], [class*="top-bar" i]') || hasAny(text, ["free shipping", "today only", "sale ends"])),
   rule("general-logo-home", "Logo links back to the home page", 2, "pro", ({ doc }) => !!doc.querySelector('a[href="/"] img, a[href="/"] svg, a[aria-label*="home" i], a[aria-label*="logo" i]')),
   rule("general-social-links", "Social links are easy to find", 1, "pro", ({ doc }) => !!doc.querySelector('a[href*="instagram"], a[href*="facebook"], a[href*="tiktok"], a[href*="youtube"]')),
-  rule("general-newsletter", "Email capture is present", 1, "pro", ({ doc, text }) => !!doc.querySelector('input[type="email"]') || hasAny(text, ["subscribe", "newsletter"])),
-  rule("general-favicon", "Storefront includes favicon / brand icon signals", 1, "pro", ({ doc }) => !!doc.querySelector('link[rel*="icon" i][href], meta[property="og:image"]')),
-  rule("general-footer-contact", "Footer contains contact or company reassurance", 2, "pro", ({ doc, text }) => !!doc.querySelector('footer a[href^="mailto:"], footer a[href^="tel:"], footer address') || hasAny(text, ["contact us", "customer service", "call us", "email us"])),
-  rule("general-account-access", "Account or login access is available", 1, "pro", ({ doc, text }) => !!doc.querySelector('a[href*="account" i], a[href*="login" i]') || hasAny(text, ["sign in", "account", "log in"])),
-  rule("general-cart-access", "Cart access is clearly visible from the header", 2, "pro", ({ doc, text }) => !!doc.querySelector('header a[href*="cart" i], a[aria-label*="cart" i], [class*="cart" i] a[href]') || hasAny(text, ["cart", "bag"])),
-  rule("general-trust-footer", "Footer or lower page area reinforces trust and policies", 2, "pro", ({ text }) => hasAny(text, ["privacy policy", "terms", "refund policy", "return policy", "secure checkout", "money back"])),
-  rule("general-mobile-cta-spacing", "Interactive elements appear plentiful enough for mobile-friendly browsing", 1, "pro", ({ context }) => (context?.domStats?.buttons || 0) >= 2 && ((context?.domStats?.forms || 0) + (context?.domStats?.searchInputs || 0) + (context?.domStats?.ctaCount || 0)) >= 3)
+  rule("general-newsletter", "Email capture is present", 1, "pro", ({ doc, text }) => !!doc.querySelector('input[type="email"]') || hasAny(text, ["subscribe", "newsletter"]))
 );
 AUTOMATED_CHECKS.home.push(
   rule("home-category-links", "Home page highlights category or collection links", 2, "pro", ({ doc, text }) => [...doc.querySelectorAll('a[href]')].some((a) => /\/(collections|category|shop)/i.test(a.getAttribute('href') || '')) || hasAny(text, ["shop by category", "collections"])),
   rule("home-usp-icons", "Home page highlights shopping benefits with supporting icons or short bullets", 2, "pro", ({ doc, text }) => doc.querySelectorAll('svg, [class*="icon" i]').length >= 3 && hasAny(text, ["free shipping", "easy returns", "guarantee"])),
-  rule("home-newsletter", "Home page offers newsletter capture", 1, "pro", ({ doc }) => !!doc.querySelector('input[type="email"]')),
-  rule("home-hero-strength", "Home page hero combines headline, support copy, and a CTA", 3, "pro", ({ doc, context, text }) => hasStrongHero(doc, context, text)),
-  rule("home-featured-products", "Home page surfaces featured products or best sellers", 2, "pro", ({ text, doc }) => hasAny(text, ["best seller", "featured products", "new arrivals", "shop best sellers"]) || doc.querySelectorAll('[class*="product" i], [data-product]').length >= 4),
-  rule("home-navigation-depth", "Home page header navigation exposes multiple shopping paths", 1, "pro", ({ context }) => (context?.domStats?.navLinks || 0) >= 4),
-  rule("home-visual-density", "Home page includes enough visual merchandising", 1, "pro", ({ context }) => (context?.domStats?.images || 0) >= 4),
-  rule("home-reassurance-near-top", "Home page contains reassurance messaging near the main journey", 2, "pro", ({ text }) => hasAny(text, ["free returns", "free shipping", "secure checkout", "money-back", "guarantee"]))
+  rule("home-newsletter", "Home page offers newsletter capture", 1, "pro", ({ doc }) => !!doc.querySelector('input[type="email"]'))
 );
 AUTOMATED_CHECKS.category.push(
-  rule("category-result-count", "Category page communicates product or result count", 2, "pro", ({ text }) => /\b\d+\s+(products|items|results)\b/i.test(text)),
+  rule("category-result-count", "Category page communicates product or result count", 2, "pro", ({ text }) => /\d+\s+(products|items|results)/i.test(text)),
   rule("category-quick-add", "Category page offers quick add or quick view actions", 1, "pro", ({ text }) => hasAny(text, ["quick add", "quick view", "add to cart"])),
-  rule("category-sale-badge", "Category page surfaces promotions or sale badges", 1, "pro", ({ doc, text }) => !!doc.querySelector('[class*="sale" i], [class*="badge" i]') || hasAny(text, ["sale", "% off", "save "])),
-  rule("category-visible-images", "Category page gives each product enough visual support", 2, "pro", ({ context }) => (context?.domStats?.images || 0) >= 4),
-  rule("category-pagination-or-loadmore", "Category page exposes pagination or load-more behavior", 1, "pro", ({ text, doc }) => hasAny(text, ["load more", "next page", "previous", "showing"]) || !!doc.querySelector('nav[aria-label*="pagination" i], [class*="pagination" i]')),
-  rule("category-price-promo-mix", "Category page mixes pricing with merchandising or promo cues", 1, "pro", ({ text }) => hasCurrency(text) && hasAny(text, ["sale", "save", "% off", "best seller", "new"]))
+  rule("category-sale-badge", "Category page surfaces promotions or sale badges", 1, "pro", ({ doc, text }) => !!doc.querySelector('[class*="sale" i], [class*="badge" i]') || hasAny(text, ["sale", "% off", "save "]))
 );
 AUTOMATED_CHECKS.product.push(
   rule("product-variants", "Product page shows size, color, or variant selectors", 2, "pro", ({ doc, text }) => !!doc.querySelector('select, input[type="radio"], [class*="variant" i], [class*="swatch" i]') || hasAny(text, ["size", "color", "variant"])),
   rule("product-description", "Product page contains a meaningful description section", 2, "pro", ({ doc, text }) => (doc.querySelector('[class*="description" i], #description, .rte')?.textContent || text).length > 220),
   rule("product-related-products", "Product page suggests related or recommended products", 1, "pro", ({ text }) => hasAny(text, ["you may also like", "related products", "frequently bought together"])),
   rule("product-discount", "Product page communicates sale or compare-at pricing when relevant", 1, "pro", ({ text, doc }) => hasAny(text, ["save", "% off", "sale"]) || !!doc.querySelector('[class*="compare" i], s, del')),
-  rule("product-size-guide", "Product page offers a size guide or fit help when relevant", 1, "pro", ({ text }) => hasAny(text, ["size guide", "fit guide", "sizing"])),
-  rule("product-buybox-density", "Product page buy box combines title, price, CTA, and reassurance signals", 3, "pro", ({ context, text }) => hasProductBuyBoxStrength(context, text)),
-  rule("product-payment-options", "Product page mentions payment options or accelerated checkout", 1, "pro", ({ text, doc }) => hasAny(text, ["shop pay", "paypal", "klarna", "afterpay", "apple pay", "google pay"]) || !!doc.querySelector('[class*="shopify-payment-button" i], [class*="payment" i]')),
-  rule("product-stock-status", "Product page communicates inventory or availability status", 1, "pro", ({ text }) => hasAny(text, ["in stock", "out of stock", "available", "ships within", "ready to ship"])),
-  rule("product-delivery-estimate", "Product page sets shipping or delivery expectations", 2, "pro", ({ text }) => hasAny(text, ["delivery", "ships in", "dispatch", "estimated arrival", "arrives"])),
-  rule("product-expandable-details", "Product page includes expandable details for shipping, materials, or care", 1, "pro", ({ context }) => (context?.domStats?.accordions || 0) >= 2),
-  rule("product-secondary-cta", "Product page supports hesitant buyers with a softer next step", 1, "pro", ({ text }) => hasAny(text, ["wishlist", "save for later", "ask a question", "notify me"])),
-  rule("product-schema-depth", "Product page includes strong structured product data", 2, "pro", ({ context }) => hasStructuredDataType(context, "Product") && (hasStructuredDataType(context, "Offer") || hasStructuredDataType(context, "AggregateRating") || hasStructuredDataType(context, "Review")))
+  rule("product-size-guide", "Product page offers a size guide or fit help when relevant", 1, "pro", ({ text }) => hasAny(text, ["size guide", "fit guide", "sizing"]))
 );
 AUTOMATED_CHECKS.cart.push(
   rule("cart-payment-icons", "Cart shows payment or trust badges", 1, "pro", ({ doc, text }) => !!doc.querySelector('img[alt*="visa" i], img[alt*="mastercard" i]') || hasAny(text, ["visa", "mastercard", "paypal"])),
   rule("cart-continue-shopping", "Cart offers a continue shopping path", 1, "pro", ({ text }) => hasAny(text, ["continue shopping", "keep browsing"])),
-  rule("cart-discounts", "Cart makes discount or coupon entry easy to find", 1, "pro", ({ text }) => hasAny(text, ["coupon", "discount code", "promo code"])),
-  rule("cart-express-checkout", "Cart exposes express checkout when available", 1, "pro", ({ text }) => hasAny(text, ["shop pay", "paypal", "apple pay", "google pay", "express checkout"])),
-  rule("cart-order-summary", "Cart clearly summarizes subtotal or estimated total", 2, "pro", ({ text }) => hasAny(text, ["subtotal", "estimated total", "total"])),
-  rule("cart-stock-or-delivery", "Cart reassures users about stock or delivery timing", 1, "pro", ({ text }) => hasAny(text, ["ships", "delivery", "dispatch", "estimated arrival", "in stock"]))
+  rule("cart-discounts", "Cart makes discount or coupon entry easy to find", 1, "pro", ({ text }) => hasAny(text, ["coupon", "discount code", "promo code"]))
 );
 
 
@@ -677,7 +653,6 @@ async function runAnalysis() {
         progressUnits += 0.45;
         updateProgress(progressUnits, analysisTotalUnits, "Checking homepage performance signals...");
         homePageSpeed = await fetchPageSpeedScore(target.url);
-        pageAnalysis.speedScore = homePageSpeed?.score ?? null;
       }
 
       totalChecks += pageAnalysis.appliedChecks.length;
@@ -733,8 +708,7 @@ async function runAnalysis() {
       persistFreePlanScope(configuredPages);
     }
 
-    const rawOverallScore = totalAvailableWeight ? Math.round((totalPassedWeight / totalAvailableWeight) * 100) : 0;
-    const overallScore = refineOverallScore(rawOverallScore, pageResults, homePageSpeed);
+    const overallScore = totalAvailableWeight ? Math.round((totalPassedWeight / totalAvailableWeight) * 100) : 0;
     const report = {
       id: `report-${Date.now()}`,
       createdAt: new Date().toISOString(),
@@ -1306,7 +1280,7 @@ function normalizeThemeName(value) {
     .split(' ')
     .map((part) => part ? part.charAt(0).toUpperCase() + part.slice(1).toLowerCase() : '')
     .join(' ')
-    .replace(/\bUi\b/g, 'UI');
+    .replace(/Ui/g, 'UI');
 }
 
 function escapeRegex(value) {
@@ -1860,120 +1834,20 @@ async function analyzePage(pageType, fetchResult, plan) {
 function buildManualRecommendations(checklist, pageResults, plan) {
   const pageStatus = new Map(pageResults.map((item) => [item.type, item]));
   return checklist
-    .filter((item) => shouldSurfaceChecklistItem(item, pageStatus))
+    .filter((item) => {
+      if (item.page === "general") return item.priorityScore >= 4 || item.defaultEvaluation === "Bad" || item.defaultEvaluation === "Can be Improved";
+      return !pageStatus.has(item.page) || item.priorityScore >= 5 || item.defaultEvaluation === "Bad";
+    })
     .slice(0, plan === "pro" ? 60 : FREE_PLAN_MAX_RECOMMENDATIONS)
     .map((item) => ({
       title: item.checkpoint,
-      detail: buildChecklistRecommendationDetail(item, pageStatus),
-      priority: ((item.priorityScore || 1) + (item.impact || 1)) * (item.defaultEvaluation === "Bad" ? 1.25 : 1),
+      detail: `Review this area on the ${item.pageLabel.toLowerCase()} under ${item.section}.`,
+      priority: (item.priorityScore || 1) + (item.impact || 1),
       impactLabel: item.impact >= 3 ? "High" : item.impact === 2 ? "Medium" : "Low",
-      page: item.page,
       pageLabel: item.pageLabel,
       type: "manual",
-      sourceLabel: "Checklist heuristic",
-      confidence: inferChecklistConfidence(item, pageStatus),
-      evidence: buildChecklistEvidence(item, pageStatus),
       url: resolveRecommendationUrl(item, pageResults)
     }));
-}
-
-function shouldSurfaceChecklistItem(item, pageStatus) {
-  const relatedPages = getChecklistRelatedPages(item, pageStatus);
-  if (!relatedPages.length) {
-    return item.defaultEvaluation === "Bad" || (item.priorityScore || 0) >= 5;
-  }
-
-  const checkpoint = String(item.checkpoint || "").toLowerCase();
-  const severe = item.defaultEvaluation === "Bad" || (item.priorityScore || 0) >= 5 || (item.impact || 0) >= 3;
-  const pageCoveredWell = relatedPages.some((page) => doesChecklistLookSatisfied(checkpoint, page));
-  const pageMissingKeySignals = relatedPages.every((page) => doesChecklistLookUnsatisfied(checkpoint, page));
-
-  if (pageCoveredWell && !severe) return false;
-  if (pageMissingKeySignals) return true;
-  if (item.page === "general") return severe || !pageCoveredWell;
-  return severe;
-}
-
-function getChecklistRelatedPages(item, pageStatus) {
-  if (item.page === "general") return [...pageStatus.values()];
-  const direct = pageStatus.get(item.page);
-  return direct ? [direct] : [];
-}
-
-function doesChecklistLookSatisfied(checkpoint, page) {
-  const passedIds = new Set((page?.appliedChecks || []).filter((entry) => entry.passed).map((entry) => entry.id));
-  const signals = `${checkpoint} ${(page?.extractedSignals || []).join(" ")} ${JSON.stringify(page?.stack || {})}`.toLowerCase();
-  const resourceSummary = page?.resourceSummary || {};
-  const evidence = (page?.evidenceBadges || []).join(" ").toLowerCase();
-
-  if (checkpoint.includes("cta") && (passedIds.has("home-cta") || passedIds.has("product-atc") || passedIds.has("cart-checkout"))) return true;
-  if ((checkpoint.includes("returns") || checkpoint.includes("privacy") || checkpoint.includes("shipping policy") || checkpoint.includes("terms")) && (passedIds.has("general-policy-links") || signals.includes("shipping/returns signal"))) return true;
-  if (checkpoint.includes("search") && (passedIds.has("general-search") || signals.includes("search input"))) return true;
-  if ((checkpoint.includes("review") || checkpoint.includes("rating") || checkpoint.includes("testimonial")) && (passedIds.has("product-reviews") || passedIds.has("home-social-proof") || signals.includes("review signal") || evidence.includes("json-ld"))) return true;
-  if ((checkpoint.includes("free shipping") || checkpoint.includes("guarantee") || checkpoint.includes("money back")) && (passedIds.has("home-footer-benefits") || passedIds.has("product-shipping") || passedIds.has("cart-shipping-threshold") || signals.includes("shipping/returns signal"))) return true;
-  if ((checkpoint.includes("logo") || checkpoint.includes("home page")) && passedIds.has("general-logo-home")) return true;
-  if ((checkpoint.includes("wishlist") || checkpoint.includes("save for later")) && signals.includes("wishlist")) return true;
-  if ((checkpoint.includes("faq") || checkpoint.includes("questions")) && (passedIds.has("product-faq") || signals.includes("faq content"))) return true;
-  if ((checkpoint.includes("size guide") || checkpoint.includes("fit guide")) && passedIds.has("product-size-guide")) return true;
-  if ((checkpoint.includes("filter") || checkpoint.includes("sort")) && (passedIds.has("category-filter") || passedIds.has("category-result-count"))) return true;
-  if ((checkpoint.includes("breadcrumbs") || checkpoint.includes("breadcrumb")) && passedIds.has("category-breadcrumbs")) return true;
-  if ((checkpoint.includes("discount") || checkpoint.includes("promo") || checkpoint.includes("sale")) && (passedIds.has("product-discount") || passedIds.has("category-sale-badge") || signals.includes("price signal"))) return true;
-  if ((checkpoint.includes("secure") || checkpoint.includes("trusted") || checkpoint.includes("encrypted")) && (passedIds.has("checkout-trust") || passedIds.has("cart-trust") || signals.includes("trust") || evidence.includes("meta"))) return true;
-  if ((checkpoint.includes("structured") || checkpoint.includes("schema") || checkpoint.includes("json-ld")) && evidence.includes("json-ld")) return true;
-  if ((checkpoint.includes("load quickly") || checkpoint.includes("5 seconds")) && typeof page?.speedScore === 'number' && page.speedScore >= 65) return true;
-  if ((checkpoint.includes("footer") || checkpoint.includes("contact information")) && passedIds.has("general-footer-contact")) return true;
-  if ((checkpoint.includes("checkout") || checkpoint.includes("basket")) && (passedIds.has("cart-checkout") || passedIds.has("checkout-summary"))) return true;
-  if (resourceSummary.totalSources >= 5 && (checkpoint.includes("organization") || checkpoint.includes("real organisation"))) return true;
-  return false;
-}
-
-function doesChecklistLookUnsatisfied(checkpoint, page) {
-  const failedIds = new Set((page?.appliedChecks || []).filter((entry) => !entry.passed).map((entry) => entry.id));
-  const signals = `${checkpoint} ${(page?.extractedSignals || []).join(" ")}`.toLowerCase();
-
-  if (checkpoint.includes("cta") && (failedIds.has("home-cta") || failedIds.has("product-atc") || failedIds.has("cart-checkout"))) return true;
-  if ((checkpoint.includes("returns") || checkpoint.includes("privacy") || checkpoint.includes("shipping policy") || checkpoint.includes("terms")) && failedIds.has("general-policy-links")) return true;
-  if (checkpoint.includes("search") && failedIds.has("general-search")) return true;
-  if ((checkpoint.includes("review") || checkpoint.includes("rating") || checkpoint.includes("testimonial")) && (failedIds.has("product-reviews") || failedIds.has("home-social-proof"))) return true;
-  if ((checkpoint.includes("faq") || checkpoint.includes("questions")) && failedIds.has("product-faq")) return true;
-  if ((checkpoint.includes("size guide") || checkpoint.includes("fit guide")) && failedIds.has("product-size-guide")) return true;
-  if ((checkpoint.includes("filter") || checkpoint.includes("sort")) && failedIds.has("category-filter")) return true;
-  if ((checkpoint.includes("breadcrumbs") || checkpoint.includes("breadcrumb")) && failedIds.has("category-breadcrumbs")) return true;
-  if ((checkpoint.includes("secure") || checkpoint.includes("trusted") || checkpoint.includes("encrypted")) && (failedIds.has("checkout-trust") || failedIds.has("cart-trust"))) return true;
-  if ((checkpoint.includes("shipping") || checkpoint.includes("returns")) && !signals.includes("shipping/returns signal")) return true;
-  return false;
-}
-
-function buildChecklistRecommendationDetail(item, pageStatus) {
-  const relatedPages = getChecklistRelatedPages(item, pageStatus);
-  const pageLabel = String(item.pageLabel || PAGE_LABELS[item.page] || "relevant page").toLowerCase();
-  if (!relatedPages.length) {
-    return `This checkpoint belongs to the ${pageLabel}, but that page was not analyzed automatically. Review it manually.`;
-  }
-  const weakSignals = relatedPages
-    .flatMap((page) => (page.appliedChecks || []).filter((entry) => !entry.passed && entry.weight >= 2).slice(0, 2).map((entry) => entry.label))
-    .slice(0, 3);
-  if (weakSignals.length) {
-    return `Related signals look weak on the ${pageLabel}: ${weakSignals.join(", ")}. Review this area manually.`;
-  }
-  return `The automated scan could not confirm this checkpoint strongly enough on the ${pageLabel}. Review it manually.`;
-}
-
-function inferChecklistConfidence(item, pageStatus) {
-  const relatedPages = getChecklistRelatedPages(item, pageStatus);
-  if (!relatedPages.length) return "Low";
-  const avgReliability = relatedPages.reduce((sum, page) => sum + (page?.reliability?.score || 40), 0) / relatedPages.length;
-  return avgReliability >= 80 ? "Medium" : "Low";
-}
-
-function buildChecklistEvidence(item, pageStatus) {
-  const relatedPages = getChecklistRelatedPages(item, pageStatus);
-  if (!relatedPages.length) return "No matching analyzed page was available for this checklist checkpoint.";
-  const badges = [...new Set(relatedPages.flatMap((page) => page?.evidenceBadges || []))].slice(0, 5);
-  const summary = relatedPages
-    .map((page) => `${page.pageLabel || PAGE_LABELS[page.type] || page.type}: ${(page.fetchStatus || "reviewed")}`)
-    .join(" | ");
-  return badges.length ? `${summary}. Evidence sources: ${badges.join(", ")}.` : summary;
 }
 
 function resolveRecommendationUrl(item, pageResults) {
@@ -2811,28 +2685,19 @@ async function mapWithConcurrency(items, limit, worker) {
 }
 
 function collectDomStats(doc, structuredData) {
-  const allInteractive = [...doc.querySelectorAll('button, a[href], [role="button"], input, select, textarea')];
-  const visibleText = (doc.body?.innerText || "").replace(/\s+/g, ' ').trim();
   return {
     headings: doc.querySelectorAll('h1, h2, h3').length,
-    h1Count: doc.querySelectorAll('h1').length,
     buttons: doc.querySelectorAll('button, [role="button"]').length,
-    ctaCount: [...doc.querySelectorAll('button, a, [role="button"]')].filter((el) => /shop|buy|cart|checkout|discover|learn more|start|subscribe|add to cart|view/i.test(el.textContent || "")).length,
+    ctaCount: [...doc.querySelectorAll('button, a, [role="button"]')].filter((el) => /shop|buy|cart|checkout|discover|learn more|start|subscribe/i.test(el.textContent || "")).length,
     forms: doc.querySelectorAll('form').length,
-    emailInputs: doc.querySelectorAll('input[type="email"]').length,
     productForms: doc.querySelectorAll('form[action*="/cart"], [data-product], [itemtype*="Product"]').length + (structuredData.some((item) => item.types.includes('Product')) ? 1 : 0),
     searchInputs: doc.querySelectorAll('input[type="search"], [role="search"], form[action*="search" i]').length,
     navLinks: doc.querySelectorAll('header a[href], nav a[href]').length,
     images: doc.querySelectorAll('img, picture source').length,
-    videos: doc.querySelectorAll('video, iframe[src*="youtube" i], iframe[src*="vimeo" i]').length,
     accordions: doc.querySelectorAll('details, summary, [aria-expanded]').length,
     reviewWidgets: doc.querySelectorAll('[class*="review" i], [data-rating], [itemprop="review"], [itemprop="aggregateRating"]').length,
     faqBlocks: doc.querySelectorAll('[class*="faq" i], [id*="faq" i], details').length,
-    trustMentions: [...doc.querySelectorAll('body *')].filter((el) => /secure|returns|refund|guarantee|shipping/i.test((el.textContent || "").slice(0, 80))).length,
-    footerLinks: doc.querySelectorAll('footer a[href]').length,
-    interactiveCount: allInteractive.length,
-    textLength: visibleText.length,
-    promoMentions: (visibleText.match(/sale|save|free shipping|discount|limited|best seller/gi) || []).length
+    trustMentions: [...doc.querySelectorAll('body *')].filter((el) => /secure|returns|refund|guarantee|shipping/i.test((el.textContent || "").slice(0, 80))).length
   };
 }
 
@@ -3253,45 +3118,6 @@ function downloadJson(data, filename) {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(blobUrl);
-}
-
-function hasStrongHero(doc, context, text) {
-  const heroCandidates = [
-    doc.querySelector('main section'),
-    doc.querySelector('.hero, [class*="hero" i], [id*="hero" i], header')
-  ].filter(Boolean);
-  const heroText = heroCandidates.map((node) => (node.textContent || '').replace(/\s+/g, ' ').trim()).join(' ').toLowerCase();
-  const hasHeadline = !!doc.querySelector('h1');
-  const hasSupportCopy = heroText.length >= 80 || (context?.domStats?.textLength || 0) >= 220;
-  const hasCTA = hasPrimaryCTA(doc, text);
-  return hasHeadline && hasSupportCopy && hasCTA;
-}
-
-function hasProductBuyBoxStrength(context, text) {
-  const hasPrice = !!context?.commerceSignals?.priceSignals;
-  const hasVariants = !!context?.commerceSignals?.variantSignals;
-  const hasTrust = (context?.commerceSignals?.trustMentions || 0) > 0 || hasAny(text, ["secure", "guarantee", "returns", "shipping"]);
-  const hasCTA = (context?.domStats?.ctaCount || 0) >= 1;
-  return [hasPrice, hasVariants, hasTrust, hasCTA].filter(Boolean).length >= 3;
-}
-
-function refineOverallScore(rawScore, pageResults, homePageSpeed) {
-  let refined = Number.isFinite(rawScore) ? rawScore : 0;
-  const totalPages = pageResults.length || 0;
-  const fetchFailures = pageResults.filter((page) => !/Fetched/i.test(page.fetchStatus || '')).length;
-  const avgReliability = totalPages
-    ? pageResults.reduce((sum, page) => sum + (page?.reliability?.score || 40), 0) / totalPages
-    : 40;
-  const highImpactFailures = pageResults.reduce((sum, page) => sum + (page.appliedChecks || []).filter((entry) => !entry.passed && entry.weight >= 3).length, 0);
-  if (homePageSpeed?.score != null) {
-    if (homePageSpeed.score >= 80) refined += 3;
-    else if (homePageSpeed.score < 45) refined -= 5;
-  }
-  refined -= fetchFailures * 2;
-  refined -= Math.min(8, highImpactFailures);
-  if (avgReliability >= 80) refined += 2;
-  else if (avgReliability < 50) refined -= 3;
-  return Math.max(0, Math.min(100, Math.round(refined)));
 }
 
 function rule(id, label, weight, tier, test) {
