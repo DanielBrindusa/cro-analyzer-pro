@@ -1161,7 +1161,7 @@ function detectStoreStack(doc, text, html, url, context = null) {
   const rawHtml = String(html || "");
   const lowerHtml = `${rawHtml.toLowerCase()} ${(context?.assetText || "").toLowerCase()} ${(context?.inlineText || "").toLowerCase()} ${(context?.resourceHints || "").toLowerCase()}`;
   const hostname = safeHostname(url);
-  const signals = { platform: "Unknown", theme: "Unknown", apps: [], badges: [], signals: [] };
+  const signals = { platform: "Unknown", theme: "Unknown", themeProjectName: "Unknown", apps: [], badges: [], signals: [] };
 
   if (/cdn\.shopify\.com|shopify\.theme|x-shopify-stage|shopify-payment-button/i.test(rawHtml)) signals.platform = "Shopify";
   else if (/woocommerce|wp-content\/plugins\/woocommerce/i.test(lowerHtml)) signals.platform = "WooCommerce";
@@ -1187,7 +1187,10 @@ function detectStoreStack(doc, text, html, url, context = null) {
   appTests.forEach(([name, regex]) => { if (regex.test(lowerHtml)) signals.apps.push(name); });
 
   if (signals.platform === "Shopify") {
-    signals.theme = detectShopifyThemeName(rawHtml, lowerHtml, context) || "Unknown";
+    const projectThemeName = detectShopifyThemeProjectName(rawHtml, context);
+    const catalogThemeName = detectShopifyCatalogThemeName(rawHtml, lowerHtml, context);
+    signals.themeProjectName = projectThemeName || catalogThemeName || "Unknown";
+    signals.theme = catalogThemeName || projectThemeName || "Unknown";
   }
 
   if (hasAny(text, ["free shipping", "free delivery"])) signals.badges.push("Free shipping");
@@ -1204,7 +1207,7 @@ function detectStoreStack(doc, text, html, url, context = null) {
   return signals;
 }
 
-function detectShopifyThemeName(rawHtml, lowerHtml, context = null) {
+function detectShopifyThemeProjectName(rawHtml, context = null) {
   const combinedText = [
     rawHtml,
     context?.assetText || "",
@@ -1218,7 +1221,10 @@ function detectShopifyThemeName(rawHtml, lowerHtml, context = null) {
     /"theme_name"\s*:\s*"([^"]+)"/i,
     /data-theme-name\s*=\s*["']([^"']+)["']/i,
     /theme-name["'\s:=>]+([A-Za-z][A-Za-z0-9\-\s]{1,60})/i,
-    /\/themes\/([A-Za-z0-9\-_% ]{2,80})\//i
+    /shopify-theme-name["'\s:=>]+([A-Za-z][A-Za-z0-9\-\s]{1,60})/i,
+    /themeName\s*[:=]\s*["']([^"']+)["']/i,
+    /theme\s*:\s*\{[\s\S]{0,1200}?display_name\s*[:=]\s*["']([^"']+)["']/i,
+    /preview_theme_name\s*[:=]\s*["']([^"']+)["']/i
   ];
 
   for (const pattern of directPatterns) {
@@ -1226,6 +1232,17 @@ function detectShopifyThemeName(rawHtml, lowerHtml, context = null) {
     const normalized = normalizeThemeName(match?.[1]);
     if (normalized) return normalized;
   }
+
+  return "";
+}
+
+function detectShopifyCatalogThemeName(rawHtml, lowerHtml, context = null) {
+  const combinedText = [
+    rawHtml,
+    context?.assetText || "",
+    context?.inlineText || "",
+    context?.resourceHints || ""
+  ].join(" ");
 
   const knownThemes = [
     "Dawn", "Sense", "Refresh", "Craft", "Studio", "Ride", "Taste", "Colorblock", "Crave", "Publisher", "Origin",
@@ -1265,6 +1282,12 @@ function detectShopifyThemeName(rawHtml, lowerHtml, context = null) {
   }
 
   return "";
+}
+
+function detectShopifyThemeName(rawHtml, lowerHtml, context = null) {
+  return detectShopifyCatalogThemeName(rawHtml, lowerHtml, context)
+    || detectShopifyThemeProjectName(rawHtml, context)
+    || "";
 }
 
 function normalizeThemeName(value) {
@@ -2115,6 +2138,7 @@ function renderStackInsights(stackSummary) {
     <div class="stack-grid">
       <div class="mini-stat"><strong>Platform</strong><div class="comp-sub">${escapeHtml(stackSummary.platform || "Unknown")}</div></div>
       <div class="mini-stat"><strong>Theme</strong><div class="comp-sub">${escapeHtml(stackSummary.theme || "Unknown")}</div></div>
+      <div class="mini-stat"><strong>Theme project name</strong><div class="comp-sub">${escapeHtml(stackSummary.themeProjectName || stackSummary.theme || "Unknown")}</div></div>
     </div>
     <div class="tag-row">${apps}</div>
     <div class="tag-row">${badges || '<span class="tag">No extra storefront signals detected yet</span>'}</div>
