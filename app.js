@@ -38,7 +38,7 @@ const MULTI_PART_TLDS = [
 ];
 
 const PAGE_TYPES = ["home", "category", "product", "cart"];
-const FREE_PLAN_MAX_RECOMMENDATIONS = 1000;
+const FREE_PLAN_MAX_RECOMMENDATIONS = Number.POSITIVE_INFINITY;
 const PAGE_LABELS = {
   general: "General",
   home: "Home page",
@@ -690,8 +690,7 @@ async function runAnalysis() {
       if (impactDelta !== 0) return impactDelta;
       return (b.priority || 0) - (a.priority || 0);
     });
-    const recommendationLimit = plan === "pro" ? 20 : FREE_PLAN_MAX_RECOMMENDATIONS;
-    const topRecommendations = cleanedRecommendations.slice(0, recommendationLimit);
+    const topRecommendations = cleanedRecommendations.slice();
 
     if (competitorUrl) {
       checkAnalysisDeadline(startedAt);
@@ -976,7 +975,7 @@ function normalizeFetchedPageMarkup(text, source, pageUrl, contentType = "") {
     return { html: raw, rawText: stripHtmlToText(raw), mode: "html" };
   }
 
-  if (source === "jina") {
+  if (String(source || "").startsWith("jina")) {
     const cleaned = raw
       .replace(/^Title:\s*/im, "")
       .replace(/^URL Source:\s*/im, "")
@@ -1106,6 +1105,47 @@ function estimateHomepageSpeedFromFetchResult(fetchResult) {
   }
 }
 
+function estimateHomepageSpeedFromTextResult(textResult) {
+  if (!textResult?.ok || !textResult?.text) return null;
+
+  const rawText = String(textResult.text || "");
+  const normalizedText = rawText.replace(/\s+/g, " ").trim();
+  if (!normalizedText) return null;
+
+  const htmlLikeSignalCount = [
+    /<html[\s>]|<body[\s>]|<!doctype html/i.test(rawText) ? 1 : 0,
+    /<title[\s>]|<meta[\s>]|<script[\s>]|<link[\s>]/i.test(rawText) ? 1 : 0,
+    /(shopify|woocommerce|bigcommerce|collection|product|add to cart)/i.test(rawText) ? 1 : 0
+  ].reduce((sum, value) => sum + value, 0);
+
+  const htmlBytes = Number(textResult.transferBytes) || getApproxByteSize(rawText);
+  const timingScore = scoreFetchTimeMs(textResult.timingMs);
+  const contentScore = htmlBytes >= 180000 ? 84 : htmlBytes >= 100000 ? 76 : htmlBytes >= 50000 ? 68 : htmlBytes >= 20000 ? 61 : 55;
+  const confidenceBoost = htmlLikeSignalCount >= 2 ? 4 : htmlLikeSignalCount === 1 ? 1 : -2;
+  const score = Math.round((timingScore * 0.72) + (contentScore * 0.28) + confidenceBoost);
+  const normalizedScore = Math.max(12, Math.min(96, score));
+  const sourceMap = {
+    direct: "Homepage response estimate",
+    allorigins: "Homepage response estimate",
+    codetabs: "Homepage response estimate",
+    jina: "Homepage content estimate",
+    "jina-protocol": "Homepage content estimate"
+  };
+
+  return {
+    score: normalizedScore,
+    source: sourceMap[textResult.source] || "Homepage response estimate",
+    method: "estimated-text",
+    note: `Estimated from homepage response time and ${Math.round(htmlBytes / 1024)} KB of fetched homepage content`,
+    metrics: {
+      timingMs: Number(textResult.timingMs) || null,
+      htmlBytes,
+      contentOnly: true,
+      htmlLikeSignalCount
+    }
+  };
+}
+
 async function measureHomepageSpeed(url, existingFetchResult = null) {
   const pageSpeed = await fetchPageSpeedScore(url);
   if (pageSpeed) return pageSpeed;
@@ -1113,6 +1153,10 @@ async function measureHomepageSpeed(url, existingFetchResult = null) {
   const fetchResult = existingFetchResult?.ok ? existingFetchResult : await fetchPageHtml(url);
   const estimated = estimateHomepageSpeedFromFetchResult(fetchResult);
   if (estimated) return estimated;
+
+  const textResult = await fetchTextResource(url);
+  const textEstimated = estimateHomepageSpeedFromTextResult(textResult);
+  if (textEstimated) return textEstimated;
 
   return null;
 }
@@ -1421,7 +1465,7 @@ function extractUrlsFromXml(text, baseUrl) {
 
 async function fetchTextResource(url) {
   const normalizedUrl = String(url || "").trim();
-  if (!normalizedUrl) return { ok: false, source: "blocked", text: "", url: "" };
+  if (!normalizedUrl) return { ok: false, source: "blocked", text: "", url: "", timingMs: null, transferBytes: 0 };
 
   if (TEXT_FETCH_CACHE.has(normalizedUrl)) {
     return TEXT_FETCH_CACHE.get(normalizedUrl);
@@ -1434,17 +1478,27 @@ async function fetchTextResource(url) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
       try {
-        const response = await fetch(attempt.url, { method: "GET", signal: controller.signal });
+        const startedAt = performance.now();
+        const response = await fetch(attempt.url, { method: "GET", signal: controller.signal, cache: "no-store" });
         clearTimeout(timeoutId);
         if (!response.ok) continue;
         const text = await response.text();
-        if (text && text.length > 20) return { ok: true, source: attempt.type, text, url: normalizedUrl };
+        if (text && text.length > 20) {
+          return {
+            ok: true,
+            source: attempt.type,
+            text,
+            url: normalizedUrl,
+            timingMs: Math.round(performance.now() - startedAt),
+            transferBytes: getApproxByteSize(text)
+          };
+        }
       } catch (error) {
         clearTimeout(timeoutId);
       }
     }
 
-    return { ok: false, source: "blocked", text: "", url: normalizedUrl };
+    return { ok: false, source: "blocked", text: "", url: normalizedUrl, timingMs: null, transferBytes: 0 };
   })();
 
   TEXT_FETCH_CACHE.set(normalizedUrl, request);
@@ -1626,7 +1680,7 @@ async function discoverUrlsAdvanced(homeUrl, setStatus = () => {}) {
 function autoFillDiscoveredUrls(discovered, plan) {
   const categoryInputs = getCategoryInputs();
   if (!categoryInputs.some((input) => input.value.trim()) && discovered.categories.length) {
-    discovered.categories.slice(0, plan === "pro" ? MAX_AUTO_DISCOVERED_CATEGORIES : 1).forEach((url, index) => {
+    discovered.categories.forEach((url, index) => {
       if (index === 0 && categoryInputs[0]) categoryInputs[0].value = url;
       else addCategoryRow(url);
     });
@@ -1634,7 +1688,7 @@ function autoFillDiscoveredUrls(discovered, plan) {
 
   const productInputs = getProductInputs();
   if (!productInputs.some((input) => input.value.trim()) && discovered.products.length) {
-    discovered.products.slice(0, plan === "pro" ? MAX_AUTO_DISCOVERED_PRODUCTS : Math.min(3, discovered.products.length)).forEach((url, index) => {
+    discovered.products.forEach((url, index) => {
       if (index < productInputs.length) productInputs[index].value = url;
       else addProductRow(url);
     });
@@ -1813,7 +1867,6 @@ function buildManualRecommendations(checklist, pageResults, plan) {
       if (item.page === "general") return item.priorityScore >= 4 || item.defaultEvaluation === "Bad" || item.defaultEvaluation === "Can be Improved";
       return !pageStatus.has(item.page) || item.priorityScore >= 5 || item.defaultEvaluation === "Bad";
     })
-    .slice(0, plan === "pro" ? 60 : FREE_PLAN_MAX_RECOMMENDATIONS)
     .map((item) => ({
       title: item.checkpoint,
       detail: `Review this area on the ${item.pageLabel.toLowerCase()} under ${item.section}.`,
@@ -2764,46 +2817,6 @@ function truncateText(value, maxLength = 90) {
 }
 
 function validateFreePlanScope(plan, configuredPages) {
-  if (plan !== "free") {
-    return { allowed: true };
-  }
-
-  const normalizedUrls = configuredPages
-    .map((page) => normalizeAuditUrl(page.url))
-    .filter(Boolean);
-
-  if (!normalizedUrls.length) {
-    return { allowed: true };
-  }
-
-  const storefronts = [...new Set(normalizedUrls.map((item) => item.storefrontKey))];
-  if (storefronts.length > 1) {
-    return {
-      allowed: false,
-      message: "Free plan can analyze only one storefront at a time. Please keep all URLs on the same storefront or switch to Pro."
-    };
-  }
-
-
-  const storefrontKey = storefronts[0];
-  const ledger = getFreePlanUsageLedger();
-  const existingEntry = ledger[storefrontKey];
-
-  if (!existingEntry) {
-    return { allowed: true };
-  }
-
-  const currentSet = [...new Set(normalizedUrls.map((item) => item.pageKey))].sort();
-  const lockedSet = [...new Set(existingEntry.pageKeys || [])].sort();
-  const isSameSet = currentSet.length === lockedSet.length && currentSet.every((value, index) => value === lockedSet[index]);
-
-  if (!isSameSet) {
-    return {
-      allowed: false,
-      message: `Free plan already locked a storefront sample for ${storefrontKey}. You can re-run the same saved sample, but you cannot add new page URLs little by little to audit the full site. Upgrade to Pro to analyze additional pages.`
-    };
-  }
-
   return { allowed: true };
 }
 
