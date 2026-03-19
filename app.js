@@ -1187,10 +1187,8 @@ function detectStoreStack(doc, text, html, url, context = null) {
   appTests.forEach(([name, regex]) => { if (regex.test(lowerHtml)) signals.apps.push(name); });
 
   if (signals.platform === "Shopify") {
-    const projectThemeName = detectShopifyThemeProjectName(rawHtml, context);
-    const catalogThemeName = detectShopifyCatalogThemeName(rawHtml, lowerHtml, context);
-    signals.themeProjectName = projectThemeName || catalogThemeName || "Unknown";
-    signals.theme = catalogThemeName || projectThemeName || "Unknown";
+    signals.themeProjectName = detectShopifyThemeProjectName(rawHtml, context) || "Unknown";
+    signals.theme = detectShopifyThemeName(rawHtml, lowerHtml, context, signals.themeProjectName) || "Unknown";
   }
 
   if (hasAny(text, ["free shipping", "free delivery"])) signals.badges.push("Free shipping");
@@ -1215,28 +1213,23 @@ function detectShopifyThemeProjectName(rawHtml, context = null) {
     context?.resourceHints || ""
   ].join(" ");
 
-  const directPatterns = [
+  const projectPatterns = [
     /Shopify\.theme\s*=\s*\{[\s\S]{0,1200}?name\s*[:=]\s*["']([^"']+)["']/i,
     /"theme"\s*:\s*\{[\s\S]{0,1200}?"name"\s*:\s*"([^"]+)"/i,
     /"theme_name"\s*:\s*"([^"]+)"/i,
-    /data-theme-name\s*=\s*["']([^"']+)["']/i,
-    /theme-name["'\s:=>]+([A-Za-z][A-Za-z0-9\-\s]{1,60})/i,
-    /shopify-theme-name["'\s:=>]+([A-Za-z][A-Za-z0-9\-\s]{1,60})/i,
-    /themeName\s*[:=]\s*["']([^"']+)["']/i,
-    /theme\s*:\s*\{[\s\S]{0,1200}?display_name\s*[:=]\s*["']([^"']+)["']/i,
-    /preview_theme_name\s*[:=]\s*["']([^"']+)["']/i
+    /data-theme-name\s*=\s*["']([^"']+)["']/i
   ];
 
-  for (const pattern of directPatterns) {
+  for (const pattern of projectPatterns) {
     const match = combinedText.match(pattern);
-    const normalized = normalizeThemeName(match?.[1]);
+    const normalized = normalizeThemeProjectName(match?.[1]);
     if (normalized) return normalized;
   }
 
   return "";
 }
 
-function detectShopifyCatalogThemeName(rawHtml, lowerHtml, context = null) {
+function detectShopifyThemeName(rawHtml, lowerHtml, context = null, detectedProjectName = "") {
   const combinedText = [
     rawHtml,
     context?.assetText || "",
@@ -1244,6 +1237,7 @@ function detectShopifyCatalogThemeName(rawHtml, lowerHtml, context = null) {
     context?.resourceHints || ""
   ].join(" ");
 
+  const normalizedProjectName = normalizeThemeProjectName(detectedProjectName);
   const knownThemes = [
     "Dawn", "Sense", "Refresh", "Craft", "Studio", "Ride", "Taste", "Colorblock", "Crave", "Publisher", "Origin",
     "Impulse", "Prestige", "Pipeline", "Motion", "Enterprise", "Symmetry", "Blockshop", "Warehouse", "Broadcast",
@@ -1251,6 +1245,22 @@ function detectShopifyCatalogThemeName(rawHtml, lowerHtml, context = null) {
     "Venue", "Icon", "Palo Alto", "Canopy", "District", "Empire", "Modular", "California", "Atlantic", "Editions",
     "Baseline", "Emerge", "Testament", "Highlight", "Split", "Showcase", "Xtra", "Kalles", "Minimog", "Ella"
   ];
+  if (normalizedProjectName && knownThemes.includes(normalizedProjectName)) return normalizedProjectName;
+
+  const directPatterns = [
+    /Shopify\.theme\s*=\s*\{[\s\S]{0,1200}?name\s*[:=]\s*["']([^"']+)["']/i,
+    /"theme"\s*:\s*\{[\s\S]{0,1200}?"name"\s*:\s*"([^"]+)"/i,
+    /"theme_name"\s*:\s*"([^"]+)"/i,
+    /data-theme-name\s*=\s*["']([^"']+)["']/i,
+    /theme-name["'\s:=>]+([A-Za-z][A-Za-z0-9\-\s]{1,60})/i,
+    /\/themes\/([A-Za-z0-9\-_% ]{2,80})\//i
+  ];
+
+  for (const pattern of directPatterns) {
+    const match = combinedText.match(pattern);
+    const normalized = normalizeThemeName(match?.[1]);
+    if (normalized) return normalized;
+  }
 
   for (const themeName of knownThemes) {
     const escaped = escapeRegex(themeName.toLowerCase());
@@ -1284,10 +1294,11 @@ function detectShopifyCatalogThemeName(rawHtml, lowerHtml, context = null) {
   return "";
 }
 
-function detectShopifyThemeName(rawHtml, lowerHtml, context = null) {
-  return detectShopifyCatalogThemeName(rawHtml, lowerHtml, context)
-    || detectShopifyThemeProjectName(rawHtml, context)
-    || "";
+function normalizeThemeProjectName(value) {
+  const normalized = normalizeThemeName(value);
+  if (!normalized) return "";
+  if (/^(Live Theme|Main Theme|Published Theme|Preview Theme)$/i.test(normalized)) return "";
+  return normalized;
 }
 
 function normalizeThemeName(value) {
@@ -1945,6 +1956,10 @@ function renderReport(report) {
   document.getElementById("pagesAnalyzed").textContent = report.pagesAnalyzed;
   document.getElementById("revenueOpportunity").textContent = `${report.revenueOpportunity || estimateRevenueOpportunity(report.overallScore, report.criticalIssues, report.pagesAnalyzed)}%`;
   document.getElementById("revenueOpportunityLabel").textContent = "Heuristic upside from fixing the current gaps";
+  const themeProjectNameElement = document.getElementById("themeProjectName");
+  const themeProjectNameLabelElement = document.getElementById("themeProjectNameLabel");
+  if (themeProjectNameElement) themeProjectNameElement.textContent = report.stackSummary?.themeProjectName || "Unknown";
+  if (themeProjectNameLabelElement) themeProjectNameLabelElement.textContent = report.stackSummary?.platform === "Shopify" ? "Detected from the public storefront when exposed" : "Only available for Shopify storefronts when exposed";
   renderHomeSpeedMetric(report.homePageSpeed);
   const gauge = document.getElementById("scoreGaugeFill");
   if (gauge) gauge.style.width = `${Math.max(0, Math.min(100, report.overallScore))}%`;
@@ -2137,8 +2152,8 @@ function renderStackInsights(stackSummary) {
   container.innerHTML = `
     <div class="stack-grid">
       <div class="mini-stat"><strong>Platform</strong><div class="comp-sub">${escapeHtml(stackSummary.platform || "Unknown")}</div></div>
-      <div class="mini-stat"><strong>Theme</strong><div class="comp-sub">${escapeHtml(stackSummary.theme || "Unknown")}</div></div>
-      <div class="mini-stat"><strong>Theme project name</strong><div class="comp-sub">${escapeHtml(stackSummary.themeProjectName || stackSummary.theme || "Unknown")}</div></div>
+      <div class="mini-stat"><strong>Theme family</strong><div class="comp-sub">${escapeHtml(stackSummary.theme || "Unknown")}</div></div>
+      <div class="mini-stat"><strong>Theme project name</strong><div class="comp-sub">${escapeHtml(stackSummary.themeProjectName || "Unknown")}</div></div>
     </div>
     <div class="tag-row">${apps}</div>
     <div class="tag-row">${badges || '<span class="tag">No extra storefront signals detected yet</span>'}</div>
