@@ -10,6 +10,10 @@ const PRO_PAYMENT_LINK = "REPLACE_WITH_YOUR_STRIPE_PAYMENT_LINK";
 const PRO_UNLOCK_STORAGE_KEY = "croProAccessUnlocked";
 const FETCH_TIMEOUT_MS = 12000;
 const SPEED_TIMEOUT_MS = 12000;
+const LINKED_RESOURCE_TIMEOUT_MS = 9000;
+const MAX_LINKED_STYLESHEETS = 2;
+const MAX_LINKED_SCRIPTS = 2;
+const MAX_LINKED_RESOURCE_CHARS = 60000;
 
 const FREE_PLAN_USAGE_KEY = "croFreePlanUsageLedger";
 const FREE_PLAN_USAGE_COOKIE = "croFreePlanUsageLedger";
@@ -78,7 +82,7 @@ let AD_CONFIG = JSON.parse(JSON.stringify(DEFAULT_AD_CONFIG));
 const AUTOMATED_CHECKS = {
   general: [
     rule("general-title-present", "A clear page title exists", 3, "basic", ({ doc }) => hasTitle(doc)),
-    rule("general-meta-description", "A meta description exists", 2, "basic", ({ doc }) => !!doc.querySelector('meta[name="description"]')),
+    rule("general-meta-description", "A meta description exists", 2, "basic", ({ doc, context }) => !!doc.querySelector('meta[name="description"]') || !!context?.metaDescription),
     rule("general-contact-links", "Contact or support access is visible", 3, "basic", ({ text }) => hasAny(text, ["contact", "support", "help center", "email us", "call us", "phone"])),
     rule("general-policy-links", "Returns / privacy / shipping policies are visible", 2, "basic", ({ text }) => hasAny(text, ["returns", "refund", "privacy", "shipping policy", "delivery policy"])),
     rule("general-search", "Search is available for users", 2, "basic", ({ doc, text }) => !!doc.querySelector('input[type="search"], [role="search"]') || hasAny(text, ["search"]))
@@ -87,7 +91,7 @@ const AUTOMATED_CHECKS = {
     rule("home-h1", "Home page has a single main heading", 3, "basic", ({ doc }) => doc.querySelectorAll("h1").length >= 1),
     rule("home-cta", "Home page contains a primary CTA", 3, "basic", ({ doc, text }) => hasPrimaryCTA(doc, text)),
     rule("home-value-prop", "Home page states a value proposition", 3, "basic", ({ text }) => hasAny(text, ["why choose", "free shipping", "handcrafted", "since", "best seller", "shop now", "discover", "our story"])),
-    rule("home-social-proof", "Home page includes trust / review signals", 2, "basic", ({ text }) => hasAny(text, ["reviews", "rated", "trustpilot", "verified", "testimonial", "stars"])),
+    rule("home-social-proof", "Home page includes trust / review signals", 2, "basic", ({ text, context }) => hasAny(text, ["reviews", "rated", "trustpilot", "verified", "testimonial", "stars"]) || hasStructuredDataType(context, "AggregateRating", "Review")),
     rule("home-footer-benefits", "Home page/footer mentions shopping benefits", 2, "pro", ({ text }) => hasAny(text, ["free shipping", "easy returns", "money-back", "guarantee"]))
   ],
   category: [
@@ -102,13 +106,13 @@ const AUTOMATED_CHECKS = {
       const h1 = doc.querySelector("h1");
       return !!h1 && h1.textContent.trim().length <= 65;
     }),
-    rule("product-price", "Product price is visible", 3, "basic", ({ text }) => hasCurrency(text)),
+    rule("product-price", "Product price is visible", 3, "basic", ({ text, context }) => hasCurrency(text) || hasStructuredDataType(context, "Offer")),
     rule("product-atc", "Add to cart CTA is visible", 3, "basic", ({ text, doc }) => hasAny(text, ["add to cart", "buy now", "pre-order"]) || !!doc.querySelector('button[name="add"], [data-add-to-cart]')),
     rule("product-gallery", "Product page contains multiple visuals", 2, "basic", ({ doc }) => doc.querySelectorAll("img").length >= 3),
-    rule("product-reviews", "Reviews or ratings are visible", 3, "basic", ({ text }) => hasAny(text, ["reviews", "rated", "stars", "customer review", "read review"])),
+    rule("product-reviews", "Reviews or ratings are visible", 3, "basic", ({ text, context }) => hasAny(text, ["reviews", "rated", "stars", "customer review", "read review"]) || hasStructuredDataType(context, "AggregateRating", "Review")),
     rule("product-benefits", "Benefits or bullets near the title are present", 2, "basic", ({ text }) => hasAny(text, ["benefits", "features", "why you'll love", "why you will love", "key features"])),
     rule("product-shipping", "Shipping / returns info is visible on the page", 2, "basic", ({ text }) => hasAny(text, ["free shipping", "ships", "delivery", "returns", "refund"])),
-    rule("product-faq", "Product page includes FAQ content", 2, "pro", ({ text }) => hasAny(text, ["faq", "frequently asked questions"])),
+    rule("product-faq", "Product page includes FAQ content", 2, "pro", ({ text, context }) => hasAny(text, ["faq", "frequently asked questions"]) || hasStructuredDataType(context, "FAQPage", "Question")),
     rule("product-urgency", "Urgency or scarcity cues exist", 1, "pro", ({ text }) => hasAny(text, ["only", "left in stock", "selling fast", "limited edition", "order today"])),
     rule("product-alt-text", "A portion of images have alt text", 1, "pro", ({ doc }) => {
       const imgs = [...doc.querySelectorAll("img")];
@@ -126,7 +130,7 @@ const AUTOMATED_CHECKS = {
     rule("cart-trust", "Cart displays trust or returns reassurance", 2, "pro", ({ text }) => hasAny(text, ["secure checkout", "money-back", "returns", "guarantee", "shop with confidence"]))
   ],
   checkout: [
-    rule("checkout-summary", "Checkout shows an order summary", 3, "basic", ({ text }) => hasAny(text, ["order summary", "summary", "subtotal", "total"])),
+    rule("checkout-summary", "Checkout shows an order summary", 3, "basic", ({ text, context }) => hasAny(text, ["order summary", "summary", "subtotal", "total"]) || hasStructuredDataType(context, "Order")),
     rule("checkout-guest", "Checkout allows or mentions guest checkout", 3, "basic", ({ text }) => hasAny(text, ["guest checkout", "continue as guest"])),
     rule("checkout-help", "Checkout gives users support access", 2, "basic", ({ text }) => hasAny(text, ["contact", "support", "help", "live chat", "phone"])),
     rule("checkout-trust", "Checkout contains trust language", 2, "basic", ({ text }) => hasAny(text, ["secure", "encrypted", "confidence", "trusted"])),
@@ -520,7 +524,7 @@ async function runAnalysis() {
       const fetchResult = await fetchPageHtml(target.url);
       fetchResult.url = target.url;
       updateProgress(index + 0.5, configuredPages.length, `Scoring ${target.label}...`);
-      const pageAnalysis = analyzePage(target.type, fetchResult, plan);
+      const pageAnalysis = await analyzePage(target.type, fetchResult, plan);
 
       pageResults.push({
         ...target,
@@ -569,6 +573,11 @@ async function runAnalysis() {
     const recommendationLimit = plan === "pro" ? 20 : FREE_PLAN_MAX_RECOMMENDATIONS;
     const topRecommendations = cleanedRecommendations.slice(0, recommendationLimit);
 
+    if (competitorUrl) {
+      updateProgress((configuredPages.length || 1) + 1, (configuredPages.length || 1) + 2, "Benchmarking competitor signals...");
+      competitorReport = await analyzeCompetitor(competitorUrl, plan);
+    }
+
     if (plan === "free") {
       persistFreePlanScope(configuredPages);
     }
@@ -583,7 +592,7 @@ async function runAnalysis() {
       
       
       overallScore,
-      checksUsed: recommendationLimit,
+      checksUsed: totalChecks,
       pagesAnalyzed: configuredPages.length,
       criticalIssues,
       pageResults,
@@ -594,7 +603,8 @@ async function runAnalysis() {
       homePageSpeed,
       competitorReport,
       discovered: STATE.discovered,
-      revenueOpportunity: estimateRevenueOpportunity(overallScore, criticalIssues, configuredPages.length)
+      revenueOpportunity: estimateRevenueOpportunity(overallScore, criticalIssues, configuredPages.length),
+      inspectionSummary: buildInspectionSummary(pageResults)
     };
 
     hydrateReportLinks(report);
@@ -772,8 +782,8 @@ function getScreenshotUrl(url, provider = "primary") {
   return `https://image.thum.io/get/width/1400/noanimate/${normalizedUrl}`;
 }
 
-function detectStoreStack(doc, text, html, url) {
-  const lowerHtml = String(html || "").toLowerCase();
+function detectStoreStack(doc, text, html, url, context = null) {
+  const lowerHtml = `${String(html || "").toLowerCase()} ${(context?.assetText || "").toLowerCase()} ${(context?.resourceHints || "").toLowerCase()}`;
   const hostname = safeHostname(url);
   const signals = { platform: "Unknown", theme: "Unknown", apps: [], badges: [], signals: [] };
 
@@ -862,8 +872,9 @@ function autoFillDiscoveredUrls(discovered, plan) {
 
 async function analyzeCompetitor(url, plan) {
   const fetchResult = await fetchPageHtml(url);
-  const home = analyzePage("home", fetchResult, plan);
-  const general = analyzePage("general", fetchResult, plan);
+  fetchResult.url = url;
+  const home = await analyzePage("home", fetchResult, plan);
+  const general = await analyzePage("general", fetchResult, plan);
   const totalWeight = home.totalWeight + general.totalWeight;
   const scoreWeight = home.scoreWeight + general.scoreWeight;
   const speed = await fetchPageSpeedScore(url);
@@ -872,7 +883,8 @@ async function analyzeCompetitor(url, plan) {
     fetched: fetchResult.ok,
     score: totalWeight ? Math.round((scoreWeight / totalWeight) * 100) : 0,
     speed: speed?.score ?? null,
-    stack: fetchResult.ok ? detectStoreStack(new DOMParser().parseFromString(fetchResult.html, "text/html"), fetchResult.html.toLowerCase(), fetchResult.html, url) : null
+    stack: home.stack || general.stack || null,
+    reliability: home.reliability || general.reliability || null
   };
 }
 
@@ -912,13 +924,16 @@ async function discoverUrlsOnly() {
   autoFillDiscoveredUrls(discovered, STATE.plan);
 }
 
-function analyzePage(pageType, fetchResult, plan) {
+async function analyzePage(pageType, fetchResult, plan) {
   const parser = new DOMParser();
   const fallbackHtml = "<html><body></body></html>";
   const doc = parser.parseFromString(fetchResult.ok ? fetchResult.html : fallbackHtml, "text/html");
-  const text = (doc.body?.innerText || "").replace(/\s+/g, " ").toLowerCase();
-  const html = fetchResult.ok ? fetchResult.html : "";
-  const stack = fetchResult.ok ? detectStoreStack(doc, text, html, fetchResult.url || "") : null;
+  const context = fetchResult.ok
+    ? await buildAnalysisContext(doc, fetchResult.html, fetchResult.url || "")
+    : buildFallbackAnalysisContext(doc, fetchResult.url || "");
+
+  const stack = fetchResult.ok ? detectStoreStack(doc, context.signalText, fetchResult.html, fetchResult.url || "", context) : null;
+  context.stack = stack;
   const rules = (AUTOMATED_CHECKS[pageType] || []).filter((item) => plan === "pro" || item.tier === "basic");
 
   const appliedChecks = [];
@@ -931,7 +946,15 @@ function analyzePage(pageType, fetchResult, plan) {
     let passed = false;
     if (fetchResult.ok) {
       try {
-        passed = !!ruleDef.test({ doc, text, html, stack });
+        passed = !!ruleDef.test({
+          doc,
+          text: context.signalText,
+          html: fetchResult.html,
+          stack,
+          context,
+          structuredData: context.structuredData,
+          resources: context.resources
+        });
       } catch (error) {
         passed = false;
       }
@@ -940,12 +963,14 @@ function analyzePage(pageType, fetchResult, plan) {
     totalWeight += ruleDef.weight;
     if (passed) scoreWeight += ruleDef.weight;
 
+    const evidence = describeRuleEvidence(ruleDef, context, pageType, passed, fetchResult.ok);
     appliedChecks.push({
       id: ruleDef.id,
       label: ruleDef.label,
       passed,
       weight: ruleDef.weight,
-      tier: ruleDef.tier
+      tier: ruleDef.tier,
+      evidence
     });
 
     if (!passed) {
@@ -954,12 +979,16 @@ function analyzePage(pageType, fetchResult, plan) {
       recommendations.push({
         title: ruleDef.label,
         detail: fetchResult.ok
-          ? `This check did not pass automatically on the ${PAGE_LABELS[pageType]} URL.`
+          ? explainRuleFailure(ruleDef, pageType, context)
           : `The page could not be fetched automatically, so this important check should be reviewed manually.`,
         priority,
         impactLabel: ruleDef.weight >= 3 ? "High" : ruleDef.weight === 2 ? "Medium" : "Low",
         pageLabel: PAGE_LABELS[pageType],
-        type: fetchResult.ok ? "automatic" : "manual"
+        type: fetchResult.ok ? "automatic" : "manual",
+        sourceLabel: fetchResult.ok ? "Automatic inspection" : "Manual review",
+        confidence: fetchResult.ok ? context.reliability.label : "Low",
+        evidence: fetchResult.ok ? evidence : "Automatic page access was blocked.",
+        evidenceBadges: context.evidenceBadges || []
       });
     }
   });
@@ -972,7 +1001,12 @@ function analyzePage(pageType, fetchResult, plan) {
     criticalIssues,
     recommendations,
     stack,
-    screenshotUrl: fetchResult.url ? getScreenshotUrl(fetchResult.url) : ""
+    screenshotUrl: fetchResult.url ? getScreenshotUrl(fetchResult.url) : "",
+    reliability: context.reliability,
+    evidenceBadges: context.evidenceBadges || [],
+    structuredDataSummary: summarizeStructuredData(context.structuredData),
+    extractedSignals: context.extractedSignals,
+    resourceSummary: context.resourceSummary
   };
 }
 
@@ -1070,12 +1104,43 @@ function renderReport(report) {
   const gauge = document.getElementById("scoreGaugeFill");
   if (gauge) gauge.style.width = `${Math.max(0, Math.min(100, report.overallScore))}%`;
 
+  renderInspectionQuality(report);
   renderRecommendations(report.recommendations);
   renderPageBreakdown(report.pageResults);
   renderStackInsights(report.stackSummary);
   renderCompetitorComparison(report.competitorReport);
   renderScreenshots(report.pageResults);
   renderDiscoveredUrls(report.discovered || STATE.discovered);
+}
+
+function renderInspectionQuality(report) {
+  const container = document.getElementById("inspectionQuality");
+  if (!container) return;
+  const summary = report?.inspectionSummary || buildInspectionSummary(report?.pageResults || []);
+  const reliabilityClass = (summary.reliabilityLabel || "Low").toLowerCase().replace(/\s+/g, "-");
+  container.className = "inspection-quality-grid";
+  container.innerHTML = `
+    <article class="inspection-card">
+      <span class="metric-label">Inspection confidence</span>
+      <strong class="inspection-score ${escapeAttribute(reliabilityClass)}">${escapeHtml(summary.reliabilityLabel || "Low")}</strong>
+      <span class="metric-sub">Based on fetched pages, structured data, and linked assets</span>
+    </article>
+    <article class="inspection-card">
+      <span class="metric-label">Pages fetched</span>
+      <strong>${summary.fetchedPages}/${summary.pageCount}</strong>
+      <span class="metric-sub">Automatic page access succeeded on these URLs</span>
+    </article>
+    <article class="inspection-card">
+      <span class="metric-label">Structured data found</span>
+      <strong>${summary.structuredDataCount}</strong>
+      <span class="metric-sub">JSON-LD items used to enrich the audit</span>
+    </article>
+    <article class="inspection-card">
+      <span class="metric-label">Linked assets inspected</span>
+      <strong>${summary.assetCount}</strong>
+      <span class="metric-sub">Stylesheets and scripts checked when reachable</span>
+    </article>
+  `;
 }
 
 function renderRecommendations(recommendations) {
@@ -1094,6 +1159,8 @@ function renderRecommendations(recommendations) {
     const pageName = item.pageLabel || PAGE_LABELS[item.page] || "Relevant page";
     const linkLabel = `${index + 1}. ${item.title}`;
     const linkHint = destinationUrl ? `Open ${pageName} · ${shortDisplayUrl(destinationUrl)}` : `Open ${pageName} · No matching page URL configured`;
+    const confidence = item.confidence || (item.type === "automatic" ? "Medium" : "Low");
+    const sourceLabel = item.sourceLabel || (item.type === "automatic" ? "Automatic inspection" : "Manual review");
 
     return `
     <article class="rec-card rec-card-detailed">
@@ -1116,16 +1183,18 @@ function renderRecommendations(recommendations) {
           <strong>SOLUTION</strong>
           <p>${escapeHtml(solutionText)}</p>
         </div>
+        ${item.evidence ? `<div class="rec-block rec-evidence"><strong>EVIDENCE</strong><p>${escapeHtml(item.evidence)}</p></div>` : ""}
       </div>
 
       <div class="tag-row">
         <span class="tag info">${escapeHtml(pageName)}</span>
+        <span class="tag">${escapeHtml(sourceLabel)}</span>
+        <span class="tag confidence-tag">${escapeHtml(confidence)} confidence</span>
       </div>
     </article>
   `;
   }).join("");
 }
-
 
 function hydrateReportLinks(report) {
   if (!report || !Array.isArray(report.recommendations)) return report;
@@ -1343,12 +1412,16 @@ function renderPageBreakdown(pageResults) {
   container.innerHTML = pageResults.map((page) => {
     const passed = page.appliedChecks.filter((item) => item.passed).length;
     const failed = page.appliedChecks.length - passed;
+    const evidenceBadges = (page.evidenceBadges || []).map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join("");
+    const structuredData = (page.structuredDataSummary || []).map((item) => `<span class="tag info">${escapeHtml(item)}</span>`).join("");
+    const reliabilityLabel = page.reliability?.label || "Low";
+    const reliabilityScore = page.reliability?.score ?? 0;
     return `
       <article class="page-card">
         <div class="page-top">
           <div>
             <div class="page-title">${escapeHtml(page.label)}</div>
-            <a class="inline-link" href="${escapeHtml(page.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(page.url)}</a>
+            <a class="inline-link" href="${escapeAttribute(page.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(page.url)}</a>
           </div>
           <span class="tag ${page.fetchStatus.startsWith("Fetched") ? "success" : "warn"}">${escapeHtml(page.fetchStatus)}</span>
         </div>
@@ -1365,16 +1438,244 @@ function renderPageBreakdown(pageResults) {
             <strong>${page.appliedChecks.length}</strong>
             <span>Auto checks</span>
           </div>
+          <div class="stat-chip">
+            <strong>${reliabilityScore}</strong>
+            <span>${escapeHtml(reliabilityLabel)} confidence</span>
+          </div>
         </div>
         <p class="status-note">
           ${page.fetchStatus.startsWith("Fetched")
-            ? "This page was fetched successfully and evaluated using the automatic rules available in this static app."
+            ? "This page was fetched successfully and evaluated using page text, metadata, structured data, and reachable linked assets from this static app."
             : "This page could not be fetched automatically. Use the recommendations list as a structured manual review guide."}
         </p>
+        ${(page.extractedSignals?.length || page.resourceSummary?.assetCount || page.structuredDataSummary?.length) ? `
+          <div class="page-evidence">
+            ${evidenceBadges}
+            ${structuredData}
+            ${page.resourceSummary?.assetCount ? `<span class="tag">${page.resourceSummary.assetCount} linked assets</span>` : ""}
+          </div>` : ""}
         ${page.stack ? `<div class="tag-row"><span class="tag info">${escapeHtml(page.stack.platform || 'Unknown platform')}</span>${(page.stack.apps || []).slice(0, 3).map((app) => `<span class="tag">${escapeHtml(app)}</span>`).join('')}</div>` : ''}
       </article>
     `;
   }).join("");
+}
+
+function buildInspectionSummary(pageResults) {
+  const pageCount = pageResults.length;
+  const fetchedPages = pageResults.filter((page) => page.fetchStatus?.startsWith("Fetched")).length;
+  const structuredDataCount = pageResults.reduce((sum, page) => sum + ((page.structuredDataSummary || []).length), 0);
+  const assetCount = pageResults.reduce((sum, page) => sum + (page.resourceSummary?.assetCount || 0), 0);
+  const avgReliability = pageCount
+    ? Math.round(pageResults.reduce((sum, page) => sum + (page.reliability?.score || 0), 0) / pageCount)
+    : 0;
+  return {
+    pageCount,
+    fetchedPages,
+    structuredDataCount,
+    assetCount,
+    reliabilityScore: avgReliability,
+    reliabilityLabel: avgReliability >= 75 ? "High" : avgReliability >= 45 ? "Medium" : "Low"
+  };
+}
+
+function summarizeStructuredData(items) {
+  const types = [];
+  (items || []).forEach((entry) => {
+    const entryTypes = Array.isArray(entry?.types) ? entry.types : [];
+    entryTypes.forEach((item) => {
+      if (item && !types.includes(item)) types.push(item);
+    });
+  });
+  return types.slice(0, 4);
+}
+
+function explainRuleFailure(ruleDef, pageType, context) {
+  const hints = {
+    title: "No strong title signal was found in the parsed page title or heading structure.",
+    description: "The page is missing a clear descriptive metadata signal.",
+    search: "No strong search element or search wording was found in the parsed page content.",
+    review: "No strong review or rating signal was found in page text, structured data, or reachable assets.",
+    shipping: "Shipping or returns reassurance was not clearly found in the parsed page content.",
+    faq: "No FAQ-style content was found in the parsed text or structured data.",
+    price: "A price pattern was not confidently detected in text or structured data.",
+    cart: "The expected cart or checkout signal was not confidently detected in the parsed page content."
+  };
+  const id = ruleDef.id || "";
+  if (/meta-description/.test(id)) return hints.description;
+  if (/search/.test(id)) return hints.search;
+  if (/review|social-proof|rating/.test(id)) return hints.review;
+  if (/shipping|refund|returns|policy/.test(id)) return hints.shipping;
+  if (/faq/.test(id)) return hints.faq;
+  if (/price/.test(id)) return hints.price;
+  if (/title|h1/.test(id)) return hints.title;
+  if (/checkout|cart/.test(id)) return hints.cart;
+  const pageLabel = PAGE_LABELS[pageType] || "page";
+  return `This signal was not found strongly enough in the ${pageLabel.toLowerCase()} content that could be inspected automatically.`;
+}
+
+function describeRuleEvidence(ruleDef, context, pageType, passed, fetchOk) {
+  if (!fetchOk) return "Automatic page access was blocked.";
+  const sources = [];
+  if (context.title) sources.push(`title: ${truncateText(context.title, 70)}`);
+  if (context.metaDescription) sources.push(`meta: ${truncateText(context.metaDescription, 90)}`);
+  if ((context.structuredData || []).length) sources.push(`${context.structuredData.length} JSON-LD item${context.structuredData.length === 1 ? "" : "s"}`);
+  if (context.resourceSummary?.assetCount) sources.push(`${context.resourceSummary.assetCount} linked asset${context.resourceSummary.assetCount === 1 ? "" : "s"} inspected`);
+  if (passed) return sources.slice(0, 2).join(" · ") || "Signal confirmed from parsed page content.";
+  return sources.slice(0, 2).join(" · ") || `Checked parsed ${PAGE_LABELS[pageType].toLowerCase()} HTML only.`;
+}
+
+function buildFallbackAnalysisContext(doc, pageUrl) {
+  return {
+    url: pageUrl,
+    title: doc.querySelector("title")?.textContent?.trim() || "",
+    metaDescription: "",
+    signalText: (doc.body?.innerText || "").replace(/\s+/g, " ").toLowerCase(),
+    structuredData: [],
+    resources: { css: [], scripts: [] },
+    resourceSummary: { assetCount: 0 },
+    evidenceBadges: ["HTML"],
+    extractedSignals: [],
+    reliability: { score: 15, label: "Low" },
+    assetText: "",
+    resourceHints: ""
+  };
+}
+
+async function buildAnalysisContext(doc, html, pageUrl) {
+  const title = (doc.querySelector("title")?.textContent || "").trim();
+  const metaDescription = (doc.querySelector('meta[name="description"]')?.getAttribute("content") || "").trim();
+  const bodyText = (doc.body?.innerText || "").replace(/\s+/g, " ").trim();
+  const headingText = [...doc.querySelectorAll("h1, h2, h3")].map((el) => el.textContent.trim()).filter(Boolean).slice(0, 18).join(" ");
+  const buttonText = [...doc.querySelectorAll('button, [role="button"], a')].map((el) => el.textContent.trim()).filter(Boolean).slice(0, 30).join(" ");
+  const altText = [...doc.querySelectorAll("img[alt]")].map((el) => el.getAttribute("alt")?.trim()).filter(Boolean).slice(0, 20).join(" ");
+  const structuredData = extractStructuredData(doc);
+  const linkedResources = await inspectLinkedResources(doc, pageUrl);
+  const jsonLdText = structuredData.map((item) => item.text).join(" ");
+  const assetText = [
+    ...linkedResources.css.map((item) => item.text),
+    ...linkedResources.scripts.map((item) => item.text)
+  ].join(" ");
+  const signalText = [bodyText, title, metaDescription, headingText, buttonText, altText, jsonLdText, assetText].join(" ").replace(/\s+/g, " ").toLowerCase();
+  const evidenceBadges = ["HTML", "Meta"];
+  if (structuredData.length) evidenceBadges.push("JSON-LD");
+  if (linkedResources.css.length) evidenceBadges.push("CSS");
+  if (linkedResources.scripts.length) evidenceBadges.push("JS");
+  const extractedSignals = [
+    title ? "Title" : "",
+    metaDescription ? "Meta description" : "",
+    doc.querySelector('input[type="search"], [role="search"]') ? "Search input" : "",
+    doc.querySelector('button, [role="button"], a[href*="cart" i]') ? "CTA/button" : "",
+    structuredData.some((item) => item.types.includes("Product")) ? "Product schema" : "",
+    structuredData.some((item) => item.types.includes("AggregateRating") || item.types.includes("Review")) ? "Review schema" : ""
+  ].filter(Boolean);
+  const reliabilityScore = Math.max(25, Math.min(96, 30 + (bodyText ? 20 : 0) + (metaDescription ? 6 : 0) + (structuredData.length ? 18 : 0) + Math.min(16, linkedResources.assetCount * 4) + (title ? 6 : 0)));
+  return {
+    url: pageUrl,
+    title,
+    metaDescription,
+    signalText,
+    structuredData,
+    resources: linkedResources,
+    resourceSummary: { assetCount: linkedResources.assetCount },
+    evidenceBadges,
+    extractedSignals,
+    reliability: {
+      score: reliabilityScore,
+      label: reliabilityScore >= 75 ? "High" : reliabilityScore >= 45 ? "Medium" : "Low"
+    },
+    assetText,
+    resourceHints: [
+      ...linkedResources.css.map((item) => item.url),
+      ...linkedResources.scripts.map((item) => item.url),
+      ...structuredData.flatMap((item) => item.types)
+    ].join(" ")
+  };
+}
+
+function extractStructuredData(doc) {
+  return [...doc.querySelectorAll('script[type="application/ld+json"]')].map((node) => {
+    const raw = (node.textContent || "").trim();
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      const flat = Array.isArray(parsed) ? parsed : [parsed];
+      const types = [];
+      flat.forEach((item) => collectJsonLdTypes(item, types));
+      return { raw, text: JSON.stringify(parsed).slice(0, MAX_LINKED_RESOURCE_CHARS), types: [...new Set(types)] };
+    } catch (error) {
+      return { raw, text: raw.slice(0, MAX_LINKED_RESOURCE_CHARS), types: [] };
+    }
+  }).filter(Boolean);
+}
+
+function collectJsonLdTypes(value, bucket) {
+  if (!value) return;
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectJsonLdTypes(item, bucket));
+    return;
+  }
+  if (typeof value !== "object") return;
+  const rawType = value["@type"];
+  if (Array.isArray(rawType)) rawType.forEach((item) => item && bucket.push(String(item)));
+  else if (rawType) bucket.push(String(rawType));
+  if (value["@graph"]) collectJsonLdTypes(value["@graph"], bucket);
+}
+
+async function inspectLinkedResources(doc, pageUrl) {
+  const cssUrls = getInspectableResourceUrls(doc, pageUrl, 'link[rel*="stylesheet"][href]', 'href', MAX_LINKED_STYLESHEETS);
+  const scriptUrls = getInspectableResourceUrls(doc, pageUrl, 'script[src]', 'src', MAX_LINKED_SCRIPTS);
+  const css = [];
+  const scripts = [];
+  for (const url of cssUrls) {
+    const text = await fetchLinkedResourceText(url);
+    if (text) css.push({ url, text });
+  }
+  for (const url of scriptUrls) {
+    const text = await fetchLinkedResourceText(url);
+    if (text) scripts.push({ url, text });
+  }
+  return { css, scripts, assetCount: css.length + scripts.length };
+}
+
+function getInspectableResourceUrls(doc, pageUrl, selector, attribute, limit) {
+  const origin = safeHostname(pageUrl);
+  const urls = [];
+  [...doc.querySelectorAll(selector)].forEach((node) => {
+    const raw = node.getAttribute(attribute);
+    if (!raw || urls.length >= limit) return;
+    try {
+      const resolved = new URL(raw, pageUrl).toString();
+      if (safeHostname(resolved) !== origin) return;
+      if (!urls.includes(resolved)) urls.push(resolved);
+    } catch (error) {
+      return;
+    }
+  });
+  return urls;
+}
+
+async function fetchLinkedResourceText(url) {
+  const attempts = [url, `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`];
+  for (const attempt of attempts) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), LINKED_RESOURCE_TIMEOUT_MS);
+    try {
+      const response = await fetch(attempt, { method: "GET", signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (!response.ok) continue;
+      const text = await response.text();
+      if (text) return text.slice(0, MAX_LINKED_RESOURCE_CHARS);
+    } catch (error) {
+      clearTimeout(timeoutId);
+    }
+  }
+  return "";
+}
+
+function truncateText(value, maxLength = 90) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1)}…`;
 }
 
 function validateFreePlanScope(plan, configuredPages) {
@@ -1734,6 +2035,11 @@ function hasAny(text, phrases) {
 
 function hasCurrency(text) {
   return /(\$|€|£|ron|usd|eur)\s?\d|(\d[\d,.]*)\s?(\$|€|£|ron|usd|eur)/i.test(text);
+}
+
+function hasStructuredDataType(context, ...types) {
+  const bucket = new Set((context?.structuredData || []).flatMap((item) => item.types || []).map((item) => String(item).toLowerCase()));
+  return types.some((type) => bucket.has(String(type).toLowerCase()));
 }
 
 function impactRank(label) {
