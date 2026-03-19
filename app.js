@@ -14,6 +14,12 @@ const LINKED_RESOURCE_TIMEOUT_MS = 9000;
 const MAX_LINKED_STYLESHEETS = 2;
 const MAX_LINKED_SCRIPTS = 2;
 const MAX_LINKED_RESOURCE_CHARS = 60000;
+const MAX_AUTO_DISCOVERED_CATEGORIES = 5;
+const MAX_AUTO_DISCOVERED_PRODUCTS = 8;
+const MAX_DISCOVERY_SITEMAPS = 4;
+const MAX_DISCOVERY_URLS_FROM_SITEMAP = 250;
+const MAX_DISCOVERY_CANDIDATE_PAGES = 10;
+
 
 const FREE_PLAN_USAGE_KEY = "croFreePlanUsageLedger";
 const FREE_PLAN_USAGE_COOKIE = "croFreePlanUsageLedger";
@@ -830,26 +836,299 @@ function detectStoreStack(doc, text, html, url, context = null) {
   return signals;
 }
 
+function normalizeDiscoveredUrl(value, baseUrl) {
+  if (!value) return null;
+  const cleaned = String(value).trim();
+  if (!cleaned || cleaned.startsWith("#") || /^javascript:|^mailto:|^tel:/i.test(cleaned)) return null;
+  try {
+    const url = new URL(cleaned, baseUrl);
+    url.hash = "";
+    const pathname = url.pathname.replace(/\/{2,}/g, "/");
+    url.pathname = pathname.length > 1 ? pathname.replace(/\/$/, "") : pathname;
+    return url.toString();
+  } catch (error) {
+    return null;
+  }
+}
+
+function classifyDiscoveredUrl(url, labelText = "") {
+  try {
+    const parsed = new URL(url);
+    const path = `${parsed.pathname.toLowerCase()}/`;
+    const label = String(labelText || "").toLowerCase();
+    const combined = `${path} ${label}`;
+
+    const excluded = [
+      "/cart/", "/checkout/", "/account/", "/login/", "/register/", "/search/",
+      "/policies/", "/policy/", "/privacy/", "/terms/", "/refund/", "/returns/",
+      "/contact/", "/pages/", "/blogs/", "/blog/", "/articles/", "/collections/vendors",
+      "/collections/types", "/apps/", "/tools/"
+    ];
+    if (excluded.some((fragment) => path.includes(fragment))) return null;
+
+    if (/(^|\/)(products?|item|items)(\/|$)/i.test(path)) return "product";
+    if (/(^|\/)(collections?|category|categories|catalog|catalogue|shop|store)(\/|$)/i.test(path)) return "category";
+
+    if (/(add to cart|buy now|choose options?|quick add|shop now|view product)/i.test(combined)) return "product";
+    if (/(shop all|view all|collection|category|catalog|browse)/i.test(combined)) return "category";
+
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function createEmptyDiscoveryResult(baseUrl = "") {
+  return {
+    baseUrl,
+    categories: [],
+    products: [],
+    debug: {
+      sameDomainLinks: 0,
+      homepageLinksParsed: 0,
+      sitemapUrlsParsed: 0,
+      sitemapsTried: 0,
+      candidatePagesInspected: 0
+    },
+    notes: [],
+    source: "none",
+    status: "No URLs discovered yet."
+  };
+}
+
+function mergeDiscoveryResults(target, incoming) {
+  const categorySet = new Set(target.categories || []);
+  const productSet = new Set(target.products || []);
+  (incoming.categories || []).forEach((url) => {
+    if (categorySet.size < MAX_AUTO_DISCOVERED_CATEGORIES) categorySet.add(url);
+  });
+  (incoming.products || []).forEach((url) => {
+    if (productSet.size < MAX_AUTO_DISCOVERED_PRODUCTS) productSet.add(url);
+  });
+  target.categories = [...categorySet].slice(0, MAX_AUTO_DISCOVERED_CATEGORIES);
+  target.products = [...productSet].slice(0, MAX_AUTO_DISCOVERED_PRODUCTS);
+  return target;
+}
+
 function discoverUrlsFromHtml(html, baseUrl) {
+  const discovered = createEmptyDiscoveryResult(baseUrl);
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, "text/html");
     const base = new URL(baseUrl);
-    const links = [...doc.querySelectorAll('a[href]')]
-      .map((a) => a.getAttribute('href'))
-      .filter(Boolean)
-      .map((href) => {
-        try { return new URL(href, base).toString(); } catch (error) { return null; }
-      })
-      .filter(Boolean)
-      .filter((href) => safeHostname(href) === safeHostname(baseUrl));
+    const linkMap = new Map();
 
-    const categories = [...new Set(links.filter((href) => /\/(collections|category|collections\/all|catalog|shop)(\/|$)/i.test(new URL(href).pathname)))].slice(0, MAX_AUTO_DISCOVERED_CATEGORIES);
-    const products = [...new Set(links.filter((href) => /\/(products|product)(\/|$)/i.test(new URL(href).pathname)))].slice(0, MAX_AUTO_DISCOVERED_PRODUCTS);
-    return { categories, products };
+    [...doc.querySelectorAll('a[href]')].forEach((anchor) => {
+      const normalized = normalizeDiscoveredUrl(anchor.getAttribute("href"), base);
+      if (!normalized || safeHostname(normalized) !== safeHostname(baseUrl)) return;
+      const label = `${anchor.textContent || ""} ${anchor.getAttribute("aria-label") || ""}`.trim();
+      if (!linkMap.has(normalized) || label.length > (linkMap.get(normalized)?.label || "").length) {
+        linkMap.set(normalized, { label });
+      }
+    });
+
+    [...doc.querySelectorAll('link[rel="canonical"], link[rel="alternate"]')].forEach((node) => {
+      const normalized = normalizeDiscoveredUrl(node.getAttribute("href"), base);
+      if (!normalized || safeHostname(normalized) !== safeHostname(baseUrl)) return;
+      if (!linkMap.has(normalized)) linkMap.set(normalized, { label: "" });
+    });
+
+    discovered.debug.homepageLinksParsed = linkMap.size;
+    discovered.debug.sameDomainLinks = linkMap.size;
+
+    const categories = [];
+    const products = [];
+
+    [...linkMap.entries()].forEach(([url, meta]) => {
+      const type = classifyDiscoveredUrl(url, meta.label);
+      if (type === "category" && categories.length < MAX_AUTO_DISCOVERED_CATEGORIES) categories.push(url);
+      if (type === "product" && products.length < MAX_AUTO_DISCOVERED_PRODUCTS) products.push(url);
+    });
+
+    discovered.categories = [...new Set(categories)];
+    discovered.products = [...new Set(products)];
+    return discovered;
   } catch (error) {
-    return { categories: [], products: [] };
+    discovered.notes.push("The home page HTML could not be parsed for links.");
+    return discovered;
   }
+}
+
+function extractSitemapsFromRobots(text, baseUrl) {
+  const found = [];
+  String(text || "").split(/\r?\n/).forEach((line) => {
+    const match = line.match(/^\s*Sitemap:\s*(.+)\s*$/i);
+    if (!match) return;
+    const normalized = normalizeDiscoveredUrl(match[1], baseUrl);
+    if (normalized) found.push(normalized);
+  });
+  return [...new Set(found)];
+}
+
+function extractUrlsFromXml(text, baseUrl) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(String(text || ""), "application/xml");
+  if (doc.querySelector("parsererror")) return { urls: [], sitemaps: [] };
+  const urls = [...doc.querySelectorAll("url > loc")].map((node) => normalizeDiscoveredUrl(node.textContent, baseUrl)).filter(Boolean);
+  const sitemaps = [...doc.querySelectorAll("sitemap > loc")].map((node) => normalizeDiscoveredUrl(node.textContent, baseUrl)).filter(Boolean);
+  return { urls, sitemaps };
+}
+
+async function fetchTextResource(url) {
+  const attempts = [
+    { type: "direct", url },
+    { type: "allorigins", url: `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}` }
+  ];
+
+  for (const attempt of attempts) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const response = await fetch(attempt.url, { method: "GET", signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (!response.ok) continue;
+      const text = await response.text();
+      if (text && text.length > 20) return { ok: true, source: attempt.type, text };
+    } catch (error) {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  return { ok: false, source: "blocked", text: "" };
+}
+
+async function inspectCandidateUrl(url) {
+  const result = await fetchPageHtml(url);
+  if (!result.ok) return null;
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(result.html, "text/html");
+    const bodyText = (doc.body?.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+    const structuredData = extractStructuredData(doc);
+    const hasProductSchema = structuredData.some((item) => {
+      const typeValue = item?.["@type"];
+      return Array.isArray(typeValue)
+        ? typeValue.some((entry) => /product/i.test(String(entry || "")))
+        : /product/i.test(String(typeValue || ""));
+    });
+    const hasCategorySignals = hasAny(bodyText, ["filter", "sort", "shop all", "view all", "collections", "category"]) || !!doc.querySelector('select, [class*="filter" i], [data-filter]');
+    const hasProductSignals = hasProductSchema
+      || hasAny(bodyText, ["add to cart", "buy now", "product details", "quantity"])
+      || !!doc.querySelector('button[name="add"], [data-add-to-cart], form[action*="/cart"]');
+
+    if (hasProductSignals && !hasCategorySignals) return "product";
+    if (hasCategorySignals && !hasProductSignals) return "category";
+    if (hasProductSignals) return "product";
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+async function discoverUrlsAdvanced(homeUrl, setStatus = () => {}) {
+  const discovered = createEmptyDiscoveryResult(homeUrl);
+  const notes = discovered.notes;
+  const setStep = (message) => {
+    discovered.status = message;
+    setStatus(message);
+  };
+
+  setStep("Fetching the home page to discover internal URLs...");
+  const homeFetch = await fetchPageHtml(homeUrl);
+  if (!homeFetch.ok) {
+    notes.push("The home page could not be fetched automatically. This usually happens because the site blocks browser fetch requests or uses heavy client-side rendering.");
+    discovered.source = "blocked";
+    discovered.status = "Automatic discovery could not access the home page.";
+    return discovered;
+  }
+
+  discovered.source = homeFetch.source;
+  mergeDiscoveryResults(discovered, discoverUrlsFromHtml(homeFetch.html, homeUrl));
+  if (discovered.categories.length || discovered.products.length) {
+    notes.push(`Home page scan found ${discovered.debug.homepageLinksParsed} same-domain links.`);
+  } else {
+    notes.push(`Home page scan found ${discovered.debug.homepageLinksParsed} same-domain links, but none matched the current product/category rules.`);
+  }
+
+  setStep("Checking robots.txt and sitemap files for more URLs...");
+  let sitemapQueue = [normalizeDiscoveredUrl("/sitemap.xml", homeUrl), normalizeDiscoveredUrl("/sitemap_index.xml", homeUrl)].filter(Boolean);
+  const robotsUrl = normalizeDiscoveredUrl("/robots.txt", homeUrl);
+  if (robotsUrl) {
+    const robotsResult = await fetchTextResource(robotsUrl);
+    if (robotsResult.ok) sitemapQueue = [...new Set([...extractSitemapsFromRobots(robotsResult.text, homeUrl), ...sitemapQueue])];
+  }
+
+  const discoveredFromSitemaps = createEmptyDiscoveryResult(homeUrl);
+  const nestedSitemaps = [];
+  for (const sitemapUrl of sitemapQueue.slice(0, MAX_DISCOVERY_SITEMAPS)) {
+    const sitemapResult = await fetchTextResource(sitemapUrl);
+    discovered.debug.sitemapsTried += 1;
+    if (!sitemapResult.ok) continue;
+    const xml = extractUrlsFromXml(sitemapResult.text, homeUrl);
+    discovered.debug.sitemapUrlsParsed += xml.urls.length;
+    nestedSitemaps.push(...xml.sitemaps);
+    xml.urls.slice(0, MAX_DISCOVERY_URLS_FROM_SITEMAP).forEach((url) => {
+      const type = classifyDiscoveredUrl(url);
+      if (type === "category") discoveredFromSitemaps.categories.push(url);
+      if (type === "product") discoveredFromSitemaps.products.push(url);
+    });
+  }
+
+  for (const sitemapUrl of [...new Set(nestedSitemaps)].slice(0, Math.max(0, MAX_DISCOVERY_SITEMAPS - discovered.debug.sitemapsTried))) {
+    const sitemapResult = await fetchTextResource(sitemapUrl);
+    discovered.debug.sitemapsTried += 1;
+    if (!sitemapResult.ok) continue;
+    const xml = extractUrlsFromXml(sitemapResult.text, homeUrl);
+    discovered.debug.sitemapUrlsParsed += xml.urls.length;
+    xml.urls.slice(0, MAX_DISCOVERY_URLS_FROM_SITEMAP).forEach((url) => {
+      const type = classifyDiscoveredUrl(url);
+      if (type === "category") discoveredFromSitemaps.categories.push(url);
+      if (type === "product") discoveredFromSitemaps.products.push(url);
+    });
+  }
+
+  mergeDiscoveryResults(discovered, {
+    categories: [...new Set(discoveredFromSitemaps.categories)],
+    products: [...new Set(discoveredFromSitemaps.products)]
+  });
+
+  if (discovered.debug.sitemapUrlsParsed) notes.push(`Sitemaps contributed ${discovered.debug.sitemapUrlsParsed} URLs for classification.`);
+  else notes.push("No usable sitemap URLs were available.");
+
+  if ((!discovered.categories.length || !discovered.products.length) && discovered.debug.homepageLinksParsed) {
+    setStep("Inspecting likely internal pages to confirm product and category patterns...");
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(homeFetch.html, "text/html");
+    const candidateUrls = [...new Set(
+      [...doc.querySelectorAll('a[href]')]
+        .map((a) => normalizeDiscoveredUrl(a.getAttribute("href"), homeUrl))
+        .filter(Boolean)
+        .filter((url) => safeHostname(url) === safeHostname(homeUrl))
+    )].slice(0, MAX_DISCOVERY_CANDIDATE_PAGES);
+
+    for (const url of candidateUrls) {
+      if (discovered.categories.length >= MAX_AUTO_DISCOVERED_CATEGORIES && discovered.products.length >= MAX_AUTO_DISCOVERED_PRODUCTS) break;
+      if (discovered.categories.includes(url) || discovered.products.includes(url)) continue;
+      const type = await inspectCandidateUrl(url);
+      discovered.debug.candidatePagesInspected += 1;
+      if (type === "category" && discovered.categories.length < MAX_AUTO_DISCOVERED_CATEGORIES) discovered.categories.push(url);
+      if (type === "product" && discovered.products.length < MAX_AUTO_DISCOVERED_PRODUCTS) discovered.products.push(url);
+    }
+
+    if (discovered.debug.candidatePagesInspected) notes.push(`Confirmed ${discovered.debug.candidatePagesInspected} candidate internal pages by inspecting their content.`);
+  }
+
+  discovered.categories = [...new Set(discovered.categories)].slice(0, MAX_AUTO_DISCOVERED_CATEGORIES);
+  discovered.products = [...new Set(discovered.products)].slice(0, MAX_AUTO_DISCOVERED_PRODUCTS);
+
+  if (discovered.categories.length || discovered.products.length) {
+    discovered.status = `Discovery complete: ${discovered.categories.length} category URL${discovered.categories.length === 1 ? "" : "s"} and ${discovered.products.length} product URL${discovered.products.length === 1 ? "" : "s"} found.`;
+  } else {
+    discovered.status = "Discovery completed, but no category or product URLs could be confirmed automatically.";
+    notes.push("Some stores hide important links behind JavaScript menus or use custom URL structures, so manual URLs may still be needed.");
+  }
+
+  return discovered;
 }
 
 function autoFillDiscoveredUrls(discovered, plan) {
@@ -913,15 +1192,39 @@ async function discoverUrlsOnly() {
     alert("Add a home page URL first.");
     return;
   }
-  const result = await fetchPageHtml(homeUrl);
-  if (!result.ok) {
-    alert("The app could not fetch the home page to discover URLs.");
-    return;
+
+  const discoverButton = document.getElementById("discoverButton");
+  if (discoverButton) {
+    discoverButton.disabled = true;
+    discoverButton.dataset.originalLabel = discoverButton.dataset.originalLabel || discoverButton.textContent;
+    discoverButton.textContent = "Discovering...";
   }
-  const discovered = discoverUrlsFromHtml(result.html, homeUrl);
-  STATE.discovered = discovered;
-  renderDiscoveredUrls(discovered);
-  autoFillDiscoveredUrls(discovered, STATE.plan);
+
+  renderDiscoveredUrls({
+    categories: [],
+    products: [],
+    status: "Starting URL discovery...",
+    notes: ["The app is scanning the home page, robots.txt, sitemap files, and likely internal links."]
+  });
+
+  try {
+    const discovered = await discoverUrlsAdvanced(homeUrl, (message) => {
+      renderDiscoveredUrls({
+        categories: [],
+        products: [],
+        status: message,
+        notes: ["The app is still working. This can take a little longer on larger stores."]
+      });
+    });
+    STATE.discovered = discovered;
+    renderDiscoveredUrls(discovered);
+    autoFillDiscoveredUrls(discovered, STATE.plan);
+  } finally {
+    if (discoverButton) {
+      discoverButton.disabled = false;
+      discoverButton.textContent = discoverButton.dataset.originalLabel || "Discover URLs";
+    }
+  }
 }
 
 async function analyzePage(pageType, fetchResult, plan) {
@@ -1353,18 +1656,30 @@ function renderDiscoveredUrls(discovered) {
   const panel = document.getElementById("discoveryPanel");
   const list = document.getElementById("discoveryList");
   if (!panel || !list) return;
+
   const categories = discovered?.categories || [];
   const products = discovered?.products || [];
-  if (!categories.length && !products.length) {
+  const notes = discovered?.notes || [];
+  const status = discovered?.status || "";
+
+  if (!categories.length && !products.length && !status && !notes.length) {
     panel.classList.add("hidden");
     list.innerHTML = "";
     return;
   }
+
   panel.classList.remove("hidden");
-  list.innerHTML = [
+  const summaryBits = [];
+  if (status) summaryBits.push(`<div class="discovery-status">${escapeHtml(status)}</div>`);
+  if (categories.length || products.length) summaryBits.push(`<div class="discovery-summary">${categories.length} category URL${categories.length === 1 ? "" : "s"} • ${products.length} product URL${products.length === 1 ? "" : "s"}</div>`);
+  if (notes.length) summaryBits.push(`<div class="discovery-notes">${notes.map((note) => `<p>${escapeHtml(note)}</p>`).join("")}</div>`);
+
+  const chips = [
     ...categories.map((url) => `<div class="discovery-chip">Category: ${escapeHtml(shortDisplayUrl(url))}</div>`),
     ...products.map((url) => `<div class="discovery-chip">Product: ${escapeHtml(shortDisplayUrl(url))}</div>`)
   ].join("");
+
+  list.innerHTML = `${summaryBits.join("")}${chips ? `<div class="discovery-chip-grid">${chips}</div>` : ""}`;
 }
 
 function renderTrendChart() {
