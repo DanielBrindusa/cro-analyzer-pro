@@ -646,8 +646,10 @@ async function runAnalysis() {
         ...pageAnalysis
       });
 
-      if (target.type === "home" && pageAnalysis.stack) {
-        stackSummary = pageAnalysis.stack;
+      if (target.type === "home") {
+        if (pageAnalysis.stack) {
+          stackSummary = pageAnalysis.stack;
+        }
         progressUnits += 0.45;
         updateProgress(progressUnits, analysisTotalUnits, "Checking homepage performance signals...");
         homePageSpeed = await fetchPageSpeedScore(target.url);
@@ -992,26 +994,158 @@ function stripHtmlToText(html) {
     .trim();
 }
 
+const PAGE_SPEED_CACHE = new Map();
+
 async function fetchPageSpeedScore(url) {
-  try {
+  const normalizedUrl = String(url || "").trim();
+  if (!normalizedUrl) return null;
+
+  if (PAGE_SPEED_CACHE.has(normalizedUrl)) {
+    return PAGE_SPEED_CACHE.get(normalizedUrl);
+  }
+
+  const request = (async () => {
+    const googleResult = await fetchGooglePageSpeedScore(normalizedUrl);
+    if (googleResult) return googleResult;
+
+    const syntheticResult = await measureSyntheticHomepageSpeed(normalizedUrl);
+    if (syntheticResult) return syntheticResult;
+
+    return null;
+  })();
+
+  PAGE_SPEED_CACHE.set(normalizedUrl, request);
+  return request;
+}
+
+async function fetchGooglePageSpeedScore(url) {
+  const endpoint = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?strategy=mobile&category=performance&url=${encodeURIComponent(url)}`;
+  const attempts = [
+    { source: "Google PageSpeed", url: endpoint },
+    { source: "Google PageSpeed", url: `https://api.allorigins.win/raw?url=${encodeURIComponent(endpoint)}` },
+    { source: "Google PageSpeed", url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(endpoint)}` }
+  ];
+
+  for (const attempt of attempts) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), SPEED_TIMEOUT_MS);
-    const endpoint = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?strategy=mobile&url=${encodeURIComponent(url)}`;
-    const response = await fetch(endpoint, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (!response.ok) return null;
+    try {
+      const response = await fetch(attempt.url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (!response.ok) continue;
+      const data = await response.json();
+      const score = data?.lighthouseResult?.categories?.performance?.score;
+      if (typeof score !== "number") continue;
 
-    const data = await response.json();
-    const score = data?.lighthouseResult?.categories?.performance?.score;
-    if (typeof score !== "number") return null;
+      return {
+        score: Math.round(score * 100),
+        source: attempt.source,
+        method: "psi"
+      };
+    } catch (error) {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  return null;
+}
+
+async function measureSyntheticHomepageSpeed(url) {
+  try {
+    const start = performance.now();
+    const fetchResult = await fetchPageHtml(url);
+    const elapsedMs = Math.max(1, Math.round(performance.now() - start));
+    if (!fetchResult?.ok || !fetchResult.html) return null;
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(fetchResult.html, "text/html");
+    const resourceUrls = getSpeedAuditResourceUrls(doc, url);
+    const sampledResources = await measureResourceSample(resourceUrls);
+    const htmlKb = Math.max(1, Math.round((fetchResult.html.length || 0) / 1024));
+
+    const imageCount = doc.querySelectorAll("img").length;
+    const scriptCount = doc.querySelectorAll('script[src]').length;
+    const stylesheetCount = doc.querySelectorAll('link[rel="stylesheet"]').length;
+    const aboveFoldPenalty = Math.min(18, Math.round(imageCount / 4) + Math.round(scriptCount / 3) + Math.round(stylesheetCount / 4));
+    const htmlPenalty = Math.min(20, Math.round(htmlKb / 35));
+    const fetchPenalty = Math.min(45, Math.round(elapsedMs / 180));
+    const resourcePenalty = sampledResources.penalty;
+    const successBonus = sampledResources.measuredCount >= 2 ? 6 : sampledResources.measuredCount === 1 ? 3 : 0;
+
+    const score = Math.max(8, Math.min(99,
+      100
+      - fetchPenalty
+      - htmlPenalty
+      - resourcePenalty
+      - aboveFoldPenalty
+      + successBonus
+    ));
 
     return {
-      score: Math.round(score * 100),
-      source: "Google PageSpeed"
+      score,
+      source: "Homepage fetch estimate",
+      method: "synthetic",
+      details: {
+        elapsedMs,
+        htmlKb,
+        sampledResources: sampledResources.measuredCount
+      }
     };
   } catch (error) {
     return null;
   }
+}
+
+function getSpeedAuditResourceUrls(doc, pageUrl) {
+  const selectors = [
+    ['link[rel="stylesheet"][href]', 'href', 4],
+    ['script[src]', 'src', 4],
+    ['link[rel="preload"][href]', 'href', 3],
+    ['img[src]', 'src', 4]
+  ];
+  const urls = [];
+  selectors.forEach(([selector, attribute, limit]) => {
+    getInspectableResourceUrls(doc, pageUrl, selector, attribute, limit).forEach((resourceUrl) => {
+      if (!urls.includes(resourceUrl)) urls.push(resourceUrl);
+    });
+  });
+  return urls.slice(0, 8);
+}
+
+async function measureResourceSample(urls) {
+  const resources = Array.isArray(urls) ? urls.slice(0, 8) : [];
+  if (!resources.length) {
+    return { measuredCount: 0, penalty: 0 };
+  }
+
+  const attempts = await Promise.all(resources.map(async (resourceUrl) => {
+    const start = performance.now();
+    const result = await fetchTextResource(resourceUrl);
+    const elapsedMs = Math.max(1, Math.round(performance.now() - start));
+    return {
+      ok: !!result?.ok,
+      elapsedMs,
+      sizeKb: Math.max(1, Math.round(((result?.text || "").length || 0) / 1024))
+    };
+  }));
+
+  const successful = attempts.filter((item) => item.ok);
+  if (!successful.length) {
+    return { measuredCount: 0, penalty: 12 };
+  }
+
+  const avgElapsed = successful.reduce((sum, item) => sum + item.elapsedMs, 0) / successful.length;
+  const avgSizeKb = successful.reduce((sum, item) => sum + item.sizeKb, 0) / successful.length;
+  const penalty = Math.min(28,
+    Math.round(avgElapsed / 220)
+    + Math.round(avgSizeKb / 32)
+    + Math.max(0, attempts.length - successful.length) * 2
+  );
+
+  return {
+    measuredCount: successful.length,
+    penalty
+  };
 }
 
 function getScreenshotUrl(url, provider = "primary") {
@@ -1678,13 +1812,14 @@ function renderHomeSpeedMetric(homePageSpeed) {
   const score = typeof homePageSpeed === "number"
     ? homePageSpeed
     : (homePageSpeed && typeof homePageSpeed.score === "number" ? homePageSpeed.score : null);
+  const sourceLabel = homePageSpeed?.source || "Google PageSpeed";
 
   speedCard.classList.remove("speed-good", "speed-medium", "speed-bad", "speed-unknown");
   speedCard.classList.add(getSpeedClass(score));
 
   scoreElement.textContent = score != null ? `${score}/100` : "Unavailable";
   labelElement.textContent = score != null
-    ? `${getSpeedMessage(score)} · Google PageSpeed mobile score`
+    ? `${getSpeedMessage(score)} · ${sourceLabel}`
     : getSpeedMessage(score);
 
   let gauge = speedCard.querySelector(".speed-meter");
