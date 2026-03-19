@@ -2,7 +2,7 @@
 
 CRO Website Analyzer is a browser-based auditing application for reviewing the conversion readiness of ecommerce storefronts. It evaluates key pages against a structured CRO ruleset, generates prioritized findings, scores the storefront on a 0–100 scale, and presents actionable recommendations in a clean client-facing interface.
 
-The application is designed to run as a static front-end deployment and can be hosted on GitHub Pages or embedded into another website. In its current architecture, it requires no server to function for the core audit workflow, report generation, local persistence, and configurable ad placements. The main UI is defined in `index.html`, the styling in `styles.css`, the analysis and application logic in `app.js`, the checklist dataset in `checklist-data.js`, and the ad controls in `ads-config.json`. fileciteturn2file5L1-L40 fileciteturn2file6L1-L40 fileciteturn2file3L1-L70
+The application is designed to run as a static front-end deployment and can be hosted on GitHub Pages or embedded into another website. In its current architecture, it requires no server to function for the core audit workflow, report generation, local persistence, and configurable ad placements. The main UI is defined in `index.html`, the styling in `styles.css`, the analysis and application logic in `app.js`, the checklist dataset in `checklist-data.js`, and the ad controls in `ads-config.json`.
 
 ## Purpose
 
@@ -21,29 +21,29 @@ The current version supports the following core capabilities:
 - configurable ad placements controlled from a separate JSON file
 - an embeddable interface suitable for websites, landing pages, and lead capture flows
 
-The plan structure and feature gating are implemented directly in the application logic, including Free plan recommendation limits and Pro plan payment-link handling. fileciteturn2file3L1-L35
+The plan structure and feature gating are implemented directly in the application logic, including Free plan recommendation limits and Pro plan payment-link handling.
 
 ## How the application works
 
 ### 1. Project setup
 
-The user enters a project name and one or more URLs to analyze. The interface supports a home page URL, cart URL, competitor home page URL, category or collection URLs, and product URLs. These inputs are presented in the main setup sidebar of the application. fileciteturn2file5L74-L129
+The user enters a project name and one or more URLs to analyze. The interface supports a home page URL, cart URL, competitor home page URL, category or collection URLs, and product URLs. These inputs are presented in the main setup sidebar of the application.
 
 ### 2. Automated analysis
 
-When the analysis starts, the app attempts to fetch the provided pages and evaluate them against a set of predefined rules. These rules are grouped by page type and cover common CRO signals such as whether an add-to-cart button exists, whether pricing is visible, whether a page contains multiple visuals, whether search is available, or whether trust and support information is present. The automated checks are defined in `app.js`. fileciteturn2file3L69-L156
+When the analysis starts, the app attempts to fetch the provided pages and evaluate them against a set of predefined rules. These rules are grouped by page type and cover common CRO signals such as whether an add-to-cart button exists, whether pricing is visible, whether a page contains multiple visuals, whether search is available, or whether trust and support information is present. The automated checks are defined in `app.js`. 
 
 ### 3. Checklist-driven scoring
 
-In addition to hardcoded automated rules, the project includes a broader CRO checklist dataset in `checklist-data.js`. Each checklist entry contains metadata such as page type, section, impact, cost, tier, and default evaluation. This allows the application to produce structured, weighted recommendations beyond a simple pass or fail model. fileciteturn2file4L1-L40
+In addition to hardcoded automated rules, the project includes a broader CRO checklist dataset in `checklist-data.js`. Each checklist entry contains metadata such as page type, section, impact, cost, tier, and default evaluation. This allows the application to produce structured, weighted recommendations beyond a simple pass or fail model.
 
 ### 4. Report generation
 
-After the analysis completes, the app displays an overall storefront score, number of checks used, critical issues, pages analyzed, estimated opportunity, page-level breakdowns, and a recommendations list. The interface is designed to present the findings in a client-friendly dashboard format. fileciteturn2file5L132-L176
+After the analysis completes, the app displays an overall storefront score, number of checks used, critical issues, pages analyzed, estimated opportunity, page-level breakdowns, and a recommendations list. The interface is designed to present the findings in a client-friendly dashboard format.
 
 ### 5. Local persistence and export
 
-Reports are stored in browser local storage, allowing the user to revisit previous results from the same browser session environment. The interface also provides export actions for JSON and PDF report formats through dedicated buttons in the setup panel. fileciteturn2file5L118-L131
+Reports are stored in browser local storage, allowing the user to revisit previous results from the same browser session environment. The interface also provides export actions for JSON and PDF report formats through dedicated buttons in the setup panel.
 
 ## Application structure
 
@@ -61,22 +61,22 @@ project-root/
 ### File overview
 
 `index.html`  
-Contains the user interface, including the hero section, pricing cards, ad banner, project setup form, progress panel, summary cards, and report sections. fileciteturn2file5L1-L129
+Contains the user interface, including the hero section, pricing cards, ad banner, project setup form, progress panel, summary cards, and report sections.
 
 `styles.css`  
-Contains the visual system for the app, including color variables, layout grids, card styling, responsive behavior, controls, dashboard sections, and ad presentation styles. fileciteturn2file6L1-L40
+Contains the visual system for the app, including color variables, layout grids, card styling, responsive behavior, controls, dashboard sections, and ad presentation styles.
 
 `app.js`  
-Contains the application state, plan logic, automated check definitions, ad config loading, ad slot initialization, and the main audit workflow. It also contains plan unlock behavior and configurable Free and Pro limits. fileciteturn2file3L1-L70
+Contains the application state, plan logic, automated check definitions, ad config loading, ad slot initialization, and the main audit workflow. It also contains plan unlock behavior and configurable Free and Pro limits.
 
 `checklist-data.js`  
-Contains the CRO checklist dataset used to enrich scoring and recommendations with broader heuristic evaluation criteria. fileciteturn2file4L1-L30
+Contains the CRO checklist dataset used to enrich scoring and recommendations with broader heuristic evaluation criteria.
 
 `ads-config.json`  
-Contains the separate ad configuration model for all ad placements on the page. Each slot can be enabled or disabled and configured independently without editing application logic. fileciteturn2file2L1-L36
+Contains the separate ad configuration model for all ad placements on the page. Each slot can be enabled or disabled and configured independently without editing application logic.
 
 `LICENSE.txt`  
-Contains the proprietary license for the project under the Formatify brand. fileciteturn2file0L1-L24
+Contains the proprietary license for the project under the Formatify brand.
 
 ## Supported page types
 
@@ -90,7 +90,7 @@ The application is structured around these primary page contexts:
 - Checkout page
 - Thank you page
 
-These labels are defined in the application state and are used across checks, reporting, and recommendation grouping. fileciteturn2file3L17-L25
+These labels are defined in the application state and are used across checks, reporting, and recommendation grouping.
 
 ## Plan model
 
@@ -109,7 +109,7 @@ The interface currently includes two plans:
 - full CRO check coverage
 - unlock flow designed for a payment-link based upgrade path
 
-The pricing cards and plan buttons are implemented in the HTML interface, while the plan logic and limits are enforced in `app.js`. fileciteturn2file5L24-L62 fileciteturn2file3L1-L18
+The pricing cards and plan buttons are implemented in the HTML interface, while the plan logic and limits are enforced in `app.js`.
 
 ## Ad system
 
@@ -132,7 +132,7 @@ Each slot supports the following fields:
 - `ctaLabel`
 - `url`
 
-The application loads `ads-config.json` at runtime, merges it with fallback defaults, and then populates each slot dynamically. If a placeholder or invalid URL is left in place, the button is safely disabled and the user receives a clear prompt to replace it. This behavior is implemented in the ad-loading functions in `app.js`. fileciteturn2file2L1-L36 fileciteturn2file3L157-L234
+The application loads `ads-config.json` at runtime, merges it with fallback defaults, and then populates each slot dynamically. If a placeholder or invalid URL is left in place, the button is safely disabled and the user receives a clear prompt to replace it. This behavior is implemented in the ad-loading functions in `app.js`.
 
 ### Example configuration
 
@@ -166,7 +166,7 @@ The application loads `ads-config.json` at runtime, merges it with fallback defa
 8. Save the settings.
 9. Wait for GitHub Pages to publish the site.
 
-For this project structure, `index.html` is the entry point, so the app can be served directly as a static site without additional build steps. The README already described GitHub Pages hosting as the intended deployment path for this version. fileciteturn2file1L24-L37
+For this project structure, `index.html` is the entry point, so the app can be served directly as a static site without additional build steps. The README already described GitHub Pages hosting as the intended deployment path for this version.
 
 ## Embedding in another website
 
@@ -194,7 +194,7 @@ Open `app.js` and replace:
 const PRO_PAYMENT_LINK = "REPLACE_WITH_YOUR_STRIPE_PAYMENT_LINK";
 ```
 
-with your actual payment URL. The app already contains the Pro unlock flow structure and return handling logic. fileciteturn2file3L7-L8
+with your actual payment URL. The app already contains the Pro unlock flow structure and return handling logic.
 
 ### Change Free plan limits
 
@@ -205,16 +205,16 @@ const FREE_PLAN_MAX_URLS_PER_STOREFRONT = 8;
 const FREE_PLAN_MAX_RECOMMENDATIONS = 10;
 ```
 
-These constants govern Free plan behavior in the application logic. fileciteturn2file3L11-L16
+These constants govern Free plan behavior in the application logic.
 
 ### Add or edit CRO rules
 
 To change the automated analysis logic, edit the `AUTOMATED_CHECKS` object in `app.js`.  
-To change the broader checklist model, edit `window.CRO_CHECKLIST` in `checklist-data.js`. fileciteturn2file3L69-L156 fileciteturn2file4L1-L30
+To change the broader checklist model, edit `window.CRO_CHECKLIST` in `checklist-data.js`.
 
 ### Change ad content quickly
 
-Edit `ads-config.json` only. In most cases, you do not need to touch `app.js` or `index.html` to update ad copy, labels, CTAs, or links. fileciteturn2file2L1-L36
+Edit `ads-config.json` only. In most cases, you do not need to touch `app.js` or `index.html` to update ad copy, labels, CTAs, or links.
 
 ### Modify the visual identity
 
@@ -229,7 +229,7 @@ Open `styles.css` and adjust the root variables to change the core appearance, e
 }
 ```
 
-The UI uses these variables throughout the application for consistent theming. fileciteturn2file6L1-L15
+The UI uses these variables throughout the application for consistent theming.
 
 ## Technical limitations
 
@@ -241,7 +241,7 @@ Because the project is currently a static browser-based application, there are s
 - the current Pro plan flow is a front-end payment-link structure, not a full subscription backend
 - scheduled reporting is not server-automated in this architecture
 
-These limitations were already noted in the earlier project documentation and remain accurate for the current version. fileciteturn2file1L14-L22
+These limitations were already noted in the earlier project documentation and remain accurate for the current version.
 
 ## Recommended next-stage improvements
 
@@ -262,7 +262,7 @@ This project is proprietary software under the Formatify brand.
 Copyright (c) 2026 Daniel Cristian Brindusa  
 All rights reserved.
 
-The included license states that the software and associated documentation are the exclusive property of Daniel Cristian Brindusa, operating under the Formatify brand, and may not be copied, modified, redistributed, reverse engineered, re-hosted, resold, or commercially exploited without explicit prior written permission. fileciteturn2file0L1-L24
+The included license states that the software and associated documentation are the exclusive property of Daniel Cristian Brindusa, operating under the Formatify brand, and may not be copied, modified, redistributed, reverse engineered, re-hosted, resold, or commercially exploited without explicit prior written permission.
 
 ## Contact
 
