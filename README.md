@@ -155,7 +155,7 @@ The easiest way to embed the app is with an iframe.
 
 ```html
 <iframe
-  src="https://danielbrindusa.github.io/cro-analyzer-pro/"
+  src="https://your-domain-or-github-pages-url/"
   width="100%"
   height="1200"
   style="border:0; border-radius:24px; overflow:hidden;"
