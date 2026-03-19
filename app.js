@@ -11,16 +11,19 @@ const PRO_UNLOCK_STORAGE_KEY = "croProAccessUnlocked";
 const FETCH_TIMEOUT_MS = 12000;
 const SPEED_TIMEOUT_MS = 12000;
 const LINKED_RESOURCE_TIMEOUT_MS = 9000;
-const MAX_LINKED_STYLESHEETS = 3;
-const MAX_LINKED_SCRIPTS = 3;
-const MAX_LINKED_RESOURCE_CHARS = 60000;
-const MAX_INLINE_TEXT_CHARS = 40000;
-const MAX_DISCOVERY_TEXT_URLS = 80;
+const MAX_LINKED_STYLESHEETS = 5;
+const MAX_LINKED_SCRIPTS = 5;
+const MAX_LINKED_RESOURCE_CHARS = 80000;
+const MAX_INLINE_TEXT_CHARS = 60000;
+const MAX_DISCOVERY_TEXT_URLS = 120;
 const MAX_AUTO_DISCOVERED_CATEGORIES = 5;
 const MAX_AUTO_DISCOVERED_PRODUCTS = 8;
-const MAX_DISCOVERY_SITEMAPS = 4;
-const MAX_DISCOVERY_URLS_FROM_SITEMAP = 250;
-const MAX_DISCOVERY_CANDIDATE_PAGES = 10;
+const MAX_DISCOVERY_SITEMAPS = 6;
+const MAX_DISCOVERY_URLS_FROM_SITEMAP = 400;
+const MAX_DISCOVERY_CANDIDATE_PAGES = 14;
+const RESOURCE_FETCH_CONCURRENCY = 4;
+const PAGE_FETCH_CACHE = new Map();
+const TEXT_FETCH_CACHE = new Map();
 
 
 const FREE_PLAN_USAGE_KEY = "croFreePlanUsageLedger";
@@ -727,55 +730,83 @@ function buildPageTargets() {
 
 
 async function fetchPageHtml(url) {
-  const attempts = buildFetchAttempts(url, { mode: "html" });
-
-  for (const attempt of attempts) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-    try {
-      const response = await fetch(attempt.url, { method: "GET", signal: controller.signal });
-      clearTimeout(timeoutId);
-      if (!response.ok) continue;
-      const text = await response.text();
-      const normalized = normalizeFetchedPageMarkup(text, attempt.type, url, response.headers.get("content-type") || "");
-      if (normalized.html && normalized.html.length > 120) {
-        return {
-          ok: true,
-          source: attempt.type,
-          html: normalized.html,
-          rawText: normalized.rawText,
-          mode: normalized.mode,
-          contentType: response.headers.get("content-type") || ""
-        };
-      }
-    } catch (error) {
-      clearTimeout(timeoutId);
-    }
+  const normalizedUrl = String(url || "").trim();
+  if (!normalizedUrl) {
+    return {
+      ok: false,
+      html: "",
+      rawText: "",
+      source: "blocked",
+      mode: "none",
+      contentType: "",
+      url: ""
+    };
   }
 
-  return {
-    ok: false,
-    html: "",
-    rawText: "",
-    source: "blocked",
-    mode: "none",
-    contentType: ""
-  };
+  if (PAGE_FETCH_CACHE.has(normalizedUrl)) {
+    return PAGE_FETCH_CACHE.get(normalizedUrl);
+  }
+
+  const request = (async () => {
+    const attempts = buildFetchAttempts(normalizedUrl, { mode: "html" });
+
+    for (const attempt of attempts) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+      try {
+        const response = await fetch(attempt.url, { method: "GET", signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!response.ok) continue;
+        const text = await response.text();
+        const normalized = normalizeFetchedPageMarkup(text, attempt.type, normalizedUrl, response.headers.get("content-type") || "");
+        if (normalized.html && normalized.html.length > 120) {
+          return {
+            ok: true,
+            source: attempt.type,
+            html: normalized.html,
+            rawText: normalized.rawText,
+            mode: normalized.mode,
+            contentType: response.headers.get("content-type") || "",
+            url: normalizedUrl,
+            finalUrl: response.url || normalizedUrl
+          };
+        }
+      } catch (error) {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    return {
+      ok: false,
+      html: "",
+      rawText: "",
+      source: "blocked",
+      mode: "none",
+      contentType: "",
+      url: normalizedUrl,
+      finalUrl: normalizedUrl
+    };
+  })();
+
+  PAGE_FETCH_CACHE.set(normalizedUrl, request);
+  return request;
 }
 
 function buildFetchAttempts(url, options = {}) {
   const normalized = String(url || "").trim();
   if (!normalized) return [];
+  const noScheme = normalized.replace(/^https?:\/\//i, "");
+  const protocol = /^http:\/\//i.test(normalized) ? "http" : "https";
   const attempts = [
     { type: "direct", url: normalized },
     { type: "allorigins", url: `https://api.allorigins.win/raw?url=${encodeURIComponent(normalized)}` },
     { type: "codetabs", url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(normalized)}` }
   ];
 
-  if (options.mode === "html") {
-    const jinaTarget = normalized.replace(/^https?:\/\//i, "");
-    attempts.push({ type: "jina", url: `https://r.jina.ai/http://${jinaTarget}` });
+  if (options.mode === "html" || options.mode === "text") {
+    attempts.push({ type: "jina", url: `https://r.jina.ai/http://${noScheme}` });
+    attempts.push({ type: "jina-protocol", url: `https://r.jina.ai/http://${protocol}://${noScheme}` });
   }
 
   return attempts;
@@ -1056,25 +1087,36 @@ function extractUrlsFromXml(text, baseUrl) {
 
 
 async function fetchTextResource(url) {
-  const attempts = buildFetchAttempts(url, { mode: "text" });
+  const normalizedUrl = String(url || "").trim();
+  if (!normalizedUrl) return { ok: false, source: "blocked", text: "", url: "" };
 
-  for (const attempt of attempts) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    try {
-      const response = await fetch(attempt.url, { method: "GET", signal: controller.signal });
-      clearTimeout(timeoutId);
-      if (!response.ok) continue;
-      const text = await response.text();
-      if (text && text.length > 20) return { ok: true, source: attempt.type, text };
-    } catch (error) {
-      clearTimeout(timeoutId);
-    }
+  if (TEXT_FETCH_CACHE.has(normalizedUrl)) {
+    return TEXT_FETCH_CACHE.get(normalizedUrl);
   }
 
-  return { ok: false, source: "blocked", text: "" };
-}
+  const request = (async () => {
+    const attempts = buildFetchAttempts(normalizedUrl, { mode: "text" });
 
+    for (const attempt of attempts) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+      try {
+        const response = await fetch(attempt.url, { method: "GET", signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!response.ok) continue;
+        const text = await response.text();
+        if (text && text.length > 20) return { ok: true, source: attempt.type, text, url: normalizedUrl };
+      } catch (error) {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    return { ok: false, source: "blocked", text: "", url: normalizedUrl };
+  })();
+
+  TEXT_FETCH_CACHE.set(normalizedUrl, request);
+  return request;
+}
 
 async function inspectCandidateUrl(url) {
   const result = await fetchPageHtml(url);
@@ -1085,13 +1127,16 @@ async function inspectCandidateUrl(url) {
     const context = await buildAnalysisContext(doc, result.html, url);
     const bodyText = String(context.signalText || "").toLowerCase();
     const hasProductSchema = hasStructuredDataType(context, "Product", "Offer");
-    const hasCategorySignals = hasAny(bodyText, ["filter", "sort", "shop all", "view all", "collections", "category", "browse"]) || !!doc.querySelector('select, [class*="filter" i], [data-filter], [data-sort]');
+    const hasCategorySignals = hasAny(bodyText, ["filter", "sort", "shop all", "view all", "collections", "category", "browse", "results"]) || !!doc.querySelector('select, [class*="filter" i], [data-filter], [data-sort], [class*="collection" i]');
     const hasProductSignals = hasProductSchema
-      || hasAny(bodyText, ["add to cart", "buy now", "product details", "quantity", "variant", "size guide"])
-      || !!doc.querySelector('button[name="add"], [data-add-to-cart], form[action*="/cart"], [data-product], [itemtype*="Product"]');
+      || hasAny(bodyText, ["add to cart", "buy now", "product details", "quantity", "variant", "size guide", "add to bag", "in stock"])
+      || !!doc.querySelector('button[name="add"], [data-add-to-cart], form[action*="/cart"], [data-product], [itemtype*="Product"], [itemprop="price"]');
 
-    if (hasProductSignals && !hasCategorySignals) return "product";
-    if (hasCategorySignals && !hasProductSignals) return "category";
+    const productScore = (hasProductSignals ? 3 : 0) + (context.commerceSignals?.priceSignals ? 2 : 0) + (context.commerceSignals?.variantSignals ? 2 : 0) + (context.domStats?.productForms ? 2 : 0);
+    const categoryScore = (hasCategorySignals ? 3 : 0) + (context.domStats?.images >= 6 ? 1 : 0) + (context.domStats?.priceNodes >= 3 ? 2 : 0);
+
+    if (productScore >= categoryScore + 2) return "product";
+    if (categoryScore >= productScore + 2) return "category";
     if (hasProductSignals) return "product";
     if (hasCategorySignals) return "category";
     return classifyDiscoveredUrl(url, bodyText);
@@ -1119,6 +1164,15 @@ async function discoverUrlsAdvanced(homeUrl, setStatus = () => {}) {
 
   discovered.source = homeFetch.source;
   mergeDiscoveryResults(discovered, discoverUrlsFromHtml(homeFetch.html, homeUrl));
+  const parser = new DOMParser();
+  const homeDoc = parser.parseFromString(homeFetch.html, "text/html");
+  const homeStructuredData = extractStructuredData(homeDoc);
+  const platformApiSignals = await inspectPlatformApiSignals(homeUrl, homeFetch.html, homeStructuredData);
+  mergeDiscoveryResults(discovered, {
+    categories: platformApiSignals.urlHints.filter((url) => classifyDiscoveredUrl(url) === "category"),
+    products: platformApiSignals.urlHints.filter((url) => classifyDiscoveredUrl(url) === "product")
+  });
+  if (platformApiSignals.badges.length) notes.push(`Storefront APIs contributed additional discovery signals (${platformApiSignals.badges.join(", ")}).`);
   if (discovered.categories.length || discovered.products.length) {
     notes.push(`Home page scan found ${discovered.debug.homepageLinksParsed} same-domain links.`);
   } else {
@@ -1172,23 +1226,24 @@ async function discoverUrlsAdvanced(homeUrl, setStatus = () => {}) {
 
   if ((!discovered.categories.length || !discovered.products.length) && discovered.debug.homepageLinksParsed) {
     setStep("Inspecting likely internal pages to confirm product and category patterns...");
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(homeFetch.html, "text/html");
     const candidateUrls = [...new Set(
-      [...doc.querySelectorAll('a[href]')]
+      [...homeDoc.querySelectorAll('a[href]')]
         .map((a) => normalizeDiscoveredUrl(a.getAttribute("href"), homeUrl))
         .filter(Boolean)
         .filter((url) => safeHostname(url) === safeHostname(homeUrl))
     )].slice(0, MAX_DISCOVERY_CANDIDATE_PAGES);
 
-    for (const url of candidateUrls) {
-      if (discovered.categories.length >= MAX_AUTO_DISCOVERED_CATEGORIES && discovered.products.length >= MAX_AUTO_DISCOVERED_PRODUCTS) break;
-      if (discovered.categories.includes(url) || discovered.products.includes(url)) continue;
-      const type = await inspectCandidateUrl(url);
+    const inspectionResults = await mapWithConcurrency(
+      candidateUrls.filter((url) => !discovered.categories.includes(url) && !discovered.products.includes(url)),
+      3,
+      async (url) => ({ url, type: await inspectCandidateUrl(url) })
+    );
+    inspectionResults.forEach((entry) => {
+      if (!entry?.type) return;
       discovered.debug.candidatePagesInspected += 1;
-      if (type === "category" && discovered.categories.length < MAX_AUTO_DISCOVERED_CATEGORIES) discovered.categories.push(url);
-      if (type === "product" && discovered.products.length < MAX_AUTO_DISCOVERED_PRODUCTS) discovered.products.push(url);
-    }
+      if (entry.type === "category" && discovered.categories.length < MAX_AUTO_DISCOVERED_CATEGORIES) discovered.categories.push(entry.url);
+      if (entry.type === "product" && discovered.products.length < MAX_AUTO_DISCOVERED_PRODUCTS) discovered.products.push(entry.url);
+    });
 
     if (discovered.debug.candidatePagesInspected) notes.push(`Confirmed ${discovered.debug.candidatePagesInspected} candidate internal pages by inspecting their content.`);
   }
@@ -1835,7 +1890,7 @@ function renderPageBreakdown(pageResults) {
         </div>
         <p class="status-note">
           ${page.fetchStatus.startsWith("Fetched")
-            ? "This page was fetched successfully and evaluated using page text, metadata, structured data, and reachable linked assets from this static app."
+            ? "This page was fetched successfully and evaluated using page text, metadata, structured data, inline commerce state, reachable linked assets, and any storefront APIs that could be reached from this static app."
             : "This page could not be fetched automatically. Use the recommendations list as a structured manual review guide."}
         </p>
         ${(page.extractedSignals?.length || page.resourceSummary?.assetCount || page.structuredDataSummary?.length) ? `
@@ -1864,7 +1919,7 @@ function buildInspectionSummary(pageResults) {
     structuredDataCount,
     assetCount,
     reliabilityScore: avgReliability,
-    reliabilityLabel: avgReliability >= 75 ? "High" : avgReliability >= 45 ? "Medium" : "Low"
+    reliabilityLabel: avgReliability >= 80 ? "High" : avgReliability >= 50 ? "Medium" : "Low"
   };
 }
 
@@ -1909,9 +1964,11 @@ function describeRuleEvidence(ruleDef, context, pageType, passed, fetchOk) {
   if (context.title) sources.push(`title: ${truncateText(context.title, 70)}`);
   if (context.metaDescription) sources.push(`meta: ${truncateText(context.metaDescription, 90)}`);
   if ((context.structuredData || []).length) sources.push(`${context.structuredData.length} JSON-LD item${context.structuredData.length === 1 ? "" : "s"}`);
-  if (context.resourceSummary?.assetCount) sources.push(`${context.resourceSummary.assetCount} linked asset${context.resourceSummary.assetCount === 1 ? "" : "s"} inspected`);
-  if (passed) return sources.slice(0, 2).join(" · ") || "Signal confirmed from parsed page content.";
-  return sources.slice(0, 2).join(" · ") || `Checked parsed ${PAGE_LABELS[pageType].toLowerCase()} HTML only.`;
+  if (context.commerceSignals?.stateSnippets?.length) sources.push(`${context.commerceSignals.stateSnippets.length} commerce-state snippet${context.commerceSignals.stateSnippets.length === 1 ? "" : "s"}`);
+  if (context.resourceSummary?.assetCount) sources.push(`${context.resourceSummary.assetCount} linked source${context.resourceSummary.assetCount === 1 ? "" : "s"} inspected`);
+  if (context.platformApiSignals?.badges?.length) sources.push(context.platformApiSignals.badges.join(", "));
+  if (passed) return sources.slice(0, 3).join(" · ") || "Signal confirmed from parsed page content.";
+  return sources.slice(0, 3).join(" · ") || `Checked parsed ${PAGE_LABELS[pageType].toLowerCase()} HTML only.`;
 }
 
 
@@ -1927,6 +1984,8 @@ function buildFallbackAnalysisContext(doc, pageUrl) {
     evidenceBadges: ["HTML"],
     extractedSignals: [],
     domStats: {},
+    commerceSignals: { stateSnippets: [], currencies: [], productHandles: [], reviewMentions: 0, trustMentions: 0, shippingMentions: 0 },
+    platformApiSignals: { badges: [], urlHints: [], score: 0, assetCount: 0 },
     reliability: { score: 18, label: "Low" },
     assetText: "",
     inlineText: "",
@@ -1942,17 +2001,21 @@ async function buildAnalysisContext(doc, html, pageUrl) {
   const ogDescription = (doc.querySelector('meta[property="og:description"], meta[name="twitter:description"]')?.getAttribute("content") || "").trim();
   const canonicalUrl = (doc.querySelector('link[rel="canonical"]')?.getAttribute("href") || "").trim();
   const bodyText = ((doc.body?.innerText || stripHtmlToText(html) || "").replace(/\s+/g, " ").trim());
-  const headingText = [...doc.querySelectorAll("h1, h2, h3")].map((el) => el.textContent.trim()).filter(Boolean).slice(0, 25).join(" ");
-  const buttonText = [...doc.querySelectorAll('button, [role="button"], a, summary')].map((el) => el.textContent.trim()).filter(Boolean).slice(0, 45).join(" ");
-  const altText = [...doc.querySelectorAll("img[alt]")].map((el) => el.getAttribute("alt")?.trim()).filter(Boolean).slice(0, 30).join(" ");
+  const headingText = [...doc.querySelectorAll("h1, h2, h3")].map((el) => el.textContent.trim()).filter(Boolean).slice(0, 30).join(" ");
+  const buttonText = [...doc.querySelectorAll('button, [role="button"], a, summary')].map((el) => el.textContent.trim()).filter(Boolean).slice(0, 60).join(" ");
+  const altText = [...doc.querySelectorAll("img[alt]")].map((el) => el.getAttribute("alt")?.trim()).filter(Boolean).slice(0, 40).join(" ");
+  const metaSignals = extractMetaSignals(doc, pageUrl);
   const structuredData = extractStructuredData(doc);
   const inlineSignals = extractInlineSignals(doc, html, pageUrl);
+  const commerceSignals = extractCommerceSignals(doc, html, structuredData, inlineSignals, pageUrl);
   const linkedResources = await inspectLinkedResources(doc, pageUrl);
+  const platformApiSignals = await inspectPlatformApiSignals(pageUrl, html, structuredData);
   const domStats = collectDomStats(doc, structuredData);
   const jsonLdText = structuredData.map((item) => item.text).join(" ");
   const assetText = [
     ...linkedResources.css.map((item) => item.text),
-    ...linkedResources.scripts.map((item) => item.text)
+    ...linkedResources.scripts.map((item) => item.text),
+    ...platformApiSignals.textSnippets
   ].join(" ");
 
   const signalText = [
@@ -1966,20 +2029,25 @@ async function buildAnalysisContext(doc, html, pageUrl) {
     buttonText,
     altText,
     jsonLdText,
+    metaSignals.text,
     inlineSignals.text,
+    commerceSignals.text,
     assetText,
     inlineSignals.urlHints.join(" "),
-    linkedResources.urlHints.join(" ")
+    linkedResources.urlHints.join(" "),
+    platformApiSignals.urlHints.join(" ")
   ].join(" ").replace(/\s+/g, " ").toLowerCase();
 
   const evidenceBadges = ["HTML"];
   if (title || metaDescription) evidenceBadges.push("Meta");
-  if (ogTitle || ogDescription) evidenceBadges.push("Open Graph");
+  if (ogTitle || ogDescription || metaSignals.extraMetaCount) evidenceBadges.push("Open Graph");
   if (structuredData.length) evidenceBadges.push("JSON-LD");
   if (inlineSignals.inlineScripts) evidenceBadges.push("Inline JS");
   if (inlineSignals.inlineStyles) evidenceBadges.push("Inline CSS");
+  if (commerceSignals.stateSnippets.length) evidenceBadges.push("App state");
   if (linkedResources.css.length) evidenceBadges.push("CSS");
   if (linkedResources.scripts.length) evidenceBadges.push("JS");
+  if (platformApiSignals.badges.length) evidenceBadges.push(...platformApiSignals.badges);
 
   const extractedSignals = [
     title ? "Title" : "",
@@ -1989,19 +2057,32 @@ async function buildAnalysisContext(doc, html, pageUrl) {
     domStats.ctaCount ? "CTA/button" : "",
     domStats.forms ? "Form" : "",
     domStats.productForms ? "Product form" : "",
+    commerceSignals.priceSignals ? "Price signal" : "",
+    commerceSignals.variantSignals ? "Variant signal" : "",
+    commerceSignals.reviewMentions ? "Review signal" : "",
+    commerceSignals.shippingMentions ? "Shipping/returns signal" : "",
     structuredData.some((item) => item.types.includes("Product")) ? "Product schema" : "",
     structuredData.some((item) => item.types.includes("AggregateRating") || item.types.includes("Review")) ? "Review schema" : "",
     domStats.reviewWidgets ? "Review widget" : "",
-    domStats.faqBlocks ? "FAQ content" : ""
+    domStats.faqBlocks ? "FAQ content" : "",
+    platformApiSignals.badges.join(", ")
   ].filter(Boolean);
 
   const textStrength = Math.min(24, Math.round(bodyText.length / 220));
-  const structuredStrength = Math.min(18, structuredData.length * 5);
-  const linkedStrength = Math.min(16, linkedResources.assetCount * 4);
-  const inlineStrength = Math.min(12, inlineSignals.inlineScripts + inlineSignals.inlineStyles * 2 + Math.min(4, inlineSignals.urlHints.length > 0 ? 4 : 0));
-  const domStrength = Math.min(16, [domStats.ctaCount, domStats.forms, domStats.productForms, domStats.images > 2 ? 1 : 0, domStats.navLinks > 5 ? 1 : 0].reduce((sum, value) => sum + (value ? 3 : 0), 0));
-  const reliabilityScore = Math.max(28, Math.min(97,
-    20
+  const structuredStrength = Math.min(20, structuredData.length * 5);
+  const linkedStrength = Math.min(20, linkedResources.assetCount * 4);
+  const inlineStrength = Math.min(16, inlineSignals.inlineScripts + inlineSignals.inlineStyles * 2 + Math.min(6, inlineSignals.urlHints.length > 0 ? 4 : 0));
+  const domStrength = Math.min(18, [domStats.ctaCount, domStats.forms, domStats.productForms, domStats.images > 2 ? 1 : 0, domStats.navLinks > 5 ? 1 : 0, domStats.structuredProductHints ? 1 : 0].reduce((sum, value) => sum + (value ? 3 : 0), 0));
+  const commerceStrength = Math.min(18, (
+    (commerceSignals.priceSignals ? 4 : 0)
+    + (commerceSignals.variantSignals ? 4 : 0)
+    + Math.min(4, commerceSignals.reviewMentions)
+    + Math.min(3, commerceSignals.shippingMentions)
+    + Math.min(3, commerceSignals.trustMentions)
+  ));
+  const platformStrength = Math.min(12, platformApiSignals.score || 0);
+  const reliabilityScore = Math.max(30, Math.min(98,
+    18
     + textStrength
     + (title ? 5 : 0)
     + (metaDescription ? 4 : 0)
@@ -2010,6 +2091,8 @@ async function buildAnalysisContext(doc, html, pageUrl) {
     + linkedStrength
     + inlineStrength
     + domStrength
+    + commerceStrength
+    + platformStrength
   ));
 
   return {
@@ -2023,25 +2106,29 @@ async function buildAnalysisContext(doc, html, pageUrl) {
     structuredData,
     resources: linkedResources,
     resourceSummary: {
-      assetCount: linkedResources.assetCount,
-      inlineCount: inlineSignals.inlineScripts + inlineSignals.inlineStyles,
-      totalSources: linkedResources.assetCount + inlineSignals.inlineScripts + inlineSignals.inlineStyles + structuredData.length + 1
+      assetCount: linkedResources.assetCount + platformApiSignals.assetCount,
+      inlineCount: inlineSignals.inlineScripts + inlineSignals.inlineStyles + commerceSignals.stateSnippets.length,
+      totalSources: linkedResources.assetCount + platformApiSignals.assetCount + inlineSignals.inlineScripts + inlineSignals.inlineStyles + commerceSignals.stateSnippets.length + structuredData.length + 1
     },
-    evidenceBadges,
-    extractedSignals,
+    evidenceBadges: [...new Set(evidenceBadges)].slice(0, 10),
+    extractedSignals: [...new Set(extractedSignals)].slice(0, 12),
     domStats,
+    commerceSignals,
+    platformApiSignals,
     reliability: {
       score: reliabilityScore,
-      label: reliabilityScore >= 75 ? "High" : reliabilityScore >= 45 ? "Medium" : "Low"
+      label: reliabilityScore >= 80 ? "High" : reliabilityScore >= 50 ? "Medium" : "Low"
     },
     assetText,
-    inlineText: inlineSignals.text,
+    inlineText: `${inlineSignals.text} ${commerceSignals.text}`,
     resourceHints: [
       ...linkedResources.css.map((item) => item.url),
       ...linkedResources.scripts.map((item) => item.url),
       ...linkedResources.urlHints,
       ...inlineSignals.urlHints,
-      ...structuredData.flatMap((item) => item.types)
+      ...platformApiSignals.urlHints,
+      ...structuredData.flatMap((item) => item.types),
+      ...commerceSignals.productHandles
     ].join(" "),
     fetchMode: "parsed"
   };
@@ -2072,6 +2159,140 @@ function extractInlineSignals(doc, html, pageUrl) {
     text: combined,
     urlHints
   };
+}
+
+function extractMetaSignals(doc, pageUrl) {
+  const metaNodes = [...doc.querySelectorAll('meta[name], meta[property], meta[itemprop]')].slice(0, 40);
+  const values = metaNodes.map((node) => `${node.getAttribute("name") || node.getAttribute("property") || node.getAttribute("itemprop")}: ${node.getAttribute("content") || ""}`.trim()).filter(Boolean);
+  const links = [...doc.querySelectorAll('link[rel][href]')].slice(0, 20).map((node) => `${node.getAttribute("rel")}: ${normalizeDiscoveredUrl(node.getAttribute("href"), pageUrl) || node.getAttribute("href") || ""}`.trim()).filter(Boolean);
+  return {
+    text: [...values, ...links].join(" "),
+    extraMetaCount: values.length + links.length
+  };
+}
+
+function extractCommerceSignals(doc, html, structuredData, inlineSignals, pageUrl) {
+  const textBank = [];
+  const stateSnippets = [];
+  const currencies = [...new Set((String(html || "").match(/(?:\$|€|£|USD|EUR|GBP|RON|CAD|AUD|JPY)/gi) || []).map((item) => item.toUpperCase()))].slice(0, 6);
+  const productHandles = [];
+  const reviewMentions = (String(html || "").match(/review|rating|stars?|testimonial|verified buyer/gi) || []).length;
+  const trustMentions = (String(html || "").match(/secure|guarantee|money[- ]back|trusted|encrypted/gi) || []).length;
+  const shippingMentions = (String(html || "").match(/shipping|delivery|returns?|refund|dispatch/gi) || []).length;
+  const variantSignals = /size|color|variant|swatch|option[1-3]/i.test(`${inlineSignals.text} ${html}`) || !!doc.querySelector('[name*="option" i], [class*="variant" i], [class*="swatch" i], select');
+  const priceSignals = hasCurrency(`${doc.body?.innerText || ""} ${html}`) || structuredData.some((item) => item.types.includes("Offer") || item.types.includes("Product"));
+
+  [...doc.querySelectorAll('script[type="application/json"], script[type*="json" i], script:not([src])')]
+    .slice(0, 12)
+    .forEach((node) => {
+      const raw = (node.textContent || "").trim();
+      if (!raw) return;
+      const snippet = raw.slice(0, MAX_INLINE_TEXT_CHARS);
+      if (/("variants"|"product"|"price"|"compare_at_price"|"inventory"|"sku"|"vendor"|"available")/i.test(snippet)) {
+        stateSnippets.push(snippet);
+        textBank.push(snippet);
+      }
+      const handleMatches = snippet.match(/"handle"\s*:\s*"([^"]+)"/gi) || [];
+      handleMatches.forEach((match) => {
+        const found = match.match(/"handle"\s*:\s*"([^"]+)"/i);
+        if (found?.[1]) productHandles.push(found[1]);
+      });
+    });
+
+  [...doc.querySelectorAll('[itemprop], [itemtype], [data-product], [data-product-id], [data-section-type], [data-cart-item-title]')]
+    .slice(0, 50)
+    .forEach((node) => {
+      const attrs = [
+        node.getAttribute('itemprop'),
+        node.getAttribute('itemtype'),
+        node.getAttribute('data-product'),
+        node.getAttribute('data-product-id'),
+        node.getAttribute('data-section-type'),
+        node.getAttribute('data-cart-item-title')
+      ].filter(Boolean);
+      if (attrs.length) textBank.push(attrs.join(' '));
+    });
+
+  structuredData.forEach((item) => {
+    if (item.raw) textBank.push(item.raw.slice(0, 4000));
+  });
+
+  return {
+    text: textBank.join(' '),
+    stateSnippets: stateSnippets.slice(0, 6),
+    currencies,
+    productHandles: [...new Set(productHandles)].slice(0, 8),
+    reviewMentions,
+    trustMentions,
+    shippingMentions,
+    variantSignals,
+    priceSignals
+  };
+}
+
+async function inspectPlatformApiSignals(pageUrl, html, structuredData) {
+  const output = { textSnippets: [], urlHints: [], badges: [], score: 0, assetCount: 0 };
+  const lower = String(html || '').toLowerCase();
+  const base = pageUrl || '';
+  if (!base) return output;
+
+  if (/shopify|cdn\.shopify\.com|myshopify\.com/.test(lower) || structuredData.some((item) => item.types.includes('Product'))) {
+    const productsEndpoint = normalizeDiscoveredUrl('/products.json?limit=12', base);
+    if (productsEndpoint) {
+      const response = await fetchTextResource(productsEndpoint);
+      if (response.ok && /^\s*[\[{]/.test(response.text)) {
+        output.badges.push('Shop API');
+        output.assetCount += 1;
+        output.score += 6;
+        output.textSnippets.push(response.text.slice(0, 12000));
+        try {
+          const parsed = JSON.parse(response.text);
+          const items = Array.isArray(parsed?.products) ? parsed.products : (Array.isArray(parsed) ? parsed : []);
+          items.slice(0, 12).forEach((item) => {
+            const handle = item?.handle;
+            if (handle) output.urlHints.push(normalizeDiscoveredUrl(`/products/${handle}`, base));
+          });
+        } catch (error) {}
+      }
+    }
+
+    const collectionsEndpoint = normalizeDiscoveredUrl('/collections.json?limit=12', base);
+    if (collectionsEndpoint) {
+      const response = await fetchTextResource(collectionsEndpoint);
+      if (response.ok && /^\s*[\[{]/.test(response.text)) {
+        output.badges.push('Collections API');
+        output.assetCount += 1;
+        output.score += 4;
+        output.textSnippets.push(response.text.slice(0, 8000));
+        try {
+          const parsed = JSON.parse(response.text);
+          const items = Array.isArray(parsed?.collections) ? parsed.collections : [];
+          items.slice(0, 12).forEach((item) => {
+            const handle = item?.handle;
+            if (handle) output.urlHints.push(normalizeDiscoveredUrl(`/collections/${handle}`, base));
+          });
+        } catch (error) {}
+      }
+    }
+  }
+
+  output.urlHints = [...new Set(output.urlHints.filter(Boolean))].slice(0, MAX_DISCOVERY_TEXT_URLS);
+  return output;
+}
+
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  async function run() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index], index);
+    }
+  }
+  const runners = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, () => run());
+  await Promise.all(runners);
+  return results;
 }
 
 function collectDomStats(doc, structuredData) {
@@ -2129,23 +2350,22 @@ function collectJsonLdTypes(value, bucket) {
 async function inspectLinkedResources(doc, pageUrl) {
   const cssUrls = getInspectableResourceUrls(doc, pageUrl, 'link[rel*="stylesheet"][href]', 'href', MAX_LINKED_STYLESHEETS);
   const scriptUrls = getInspectableResourceUrls(doc, pageUrl, 'script[src]', 'src', MAX_LINKED_SCRIPTS);
-  const css = [];
-  const scripts = [];
   const urlHints = [];
-  for (const url of cssUrls) {
+
+  const css = (await mapWithConcurrency(cssUrls, RESOURCE_FETCH_CONCURRENCY, async (url) => {
     const text = await fetchLinkedResourceText(url);
-    if (text) {
-      css.push({ url, text });
-      urlHints.push(...extractEmbeddedUrlsFromText(text, pageUrl));
-    }
-  }
-  for (const url of scriptUrls) {
+    if (!text) return null;
+    urlHints.push(...extractEmbeddedUrlsFromText(text, pageUrl));
+    return { url, text };
+  })).filter(Boolean);
+
+  const scripts = (await mapWithConcurrency(scriptUrls, RESOURCE_FETCH_CONCURRENCY, async (url) => {
     const text = await fetchLinkedResourceText(url);
-    if (text) {
-      scripts.push({ url, text });
-      urlHints.push(...extractEmbeddedUrlsFromText(text, pageUrl));
-    }
-  }
+    if (!text) return null;
+    urlHints.push(...extractEmbeddedUrlsFromText(text, pageUrl));
+    return { url, text };
+  })).filter(Boolean);
+
   return { css, scripts, assetCount: css.length + scripts.length, urlHints: [...new Set(urlHints)].slice(0, MAX_DISCOVERY_TEXT_URLS) };
 }
 
@@ -2168,21 +2388,8 @@ function getInspectableResourceUrls(doc, pageUrl, selector, attribute, limit) {
 
 
 async function fetchLinkedResourceText(url) {
-  const attempts = buildFetchAttempts(url, { mode: "text" });
-  for (const attempt of attempts) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), LINKED_RESOURCE_TIMEOUT_MS);
-    try {
-      const response = await fetch(attempt.url, { method: "GET", signal: controller.signal });
-      clearTimeout(timeoutId);
-      if (!response.ok) continue;
-      const text = await response.text();
-      if (text) return text.slice(0, MAX_LINKED_RESOURCE_CHARS);
-    } catch (error) {
-      clearTimeout(timeoutId);
-    }
-  }
-  return "";
+  const result = await fetchTextResource(url);
+  return result.ok ? result.text.slice(0, MAX_LINKED_RESOURCE_CHARS) : "";
 }
 
 function truncateText(value, maxLength = 90) {
