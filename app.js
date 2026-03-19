@@ -1158,11 +1158,12 @@ function getScreenshotUrl(url, provider = "primary") {
 }
 
 function detectStoreStack(doc, text, html, url, context = null) {
-  const lowerHtml = `${String(html || "").toLowerCase()} ${(context?.assetText || "").toLowerCase()} ${(context?.inlineText || "").toLowerCase()} ${(context?.resourceHints || "").toLowerCase()}`;
+  const rawHtml = String(html || "");
+  const lowerHtml = `${rawHtml.toLowerCase()} ${(context?.assetText || "").toLowerCase()} ${(context?.inlineText || "").toLowerCase()} ${(context?.resourceHints || "").toLowerCase()}`;
   const hostname = safeHostname(url);
   const signals = { platform: "Unknown", theme: "Unknown", apps: [], badges: [], signals: [] };
 
-  if (/cdn\.shopify\.com|shopify\.theme|x-shopify-stage|shopify-payment-button/i.test(html)) signals.platform = "Shopify";
+  if (/cdn\.shopify\.com|shopify\.theme|x-shopify-stage|shopify-payment-button/i.test(rawHtml)) signals.platform = "Shopify";
   else if (/woocommerce|wp-content\/plugins\/woocommerce/i.test(lowerHtml)) signals.platform = "WooCommerce";
   else if (/bigcommerce/i.test(lowerHtml)) signals.platform = "BigCommerce";
   else if (/myshopify\.com/i.test(lowerHtml) || /shopify/i.test(hostname)) signals.platform = "Shopify";
@@ -1185,15 +1186,8 @@ function detectStoreStack(doc, text, html, url, context = null) {
   ];
   appTests.forEach(([name, regex]) => { if (regex.test(lowerHtml)) signals.apps.push(name); });
 
-  const themePatterns = [
-    ["Dawn", /theme_store_id.*?887|"name"\s*:\s*"dawn"/i],
-    ["Impulse", /impulse/i],
-    ["Prestige", /prestige/i],
-    ["Refresh", /refresh/i],
-    ["Turbo", /turbo/i]
-  ];
-  for (const [name, regex] of themePatterns) {
-    if (regex.test(lowerHtml)) { signals.theme = name; break; }
+  if (signals.platform === "Shopify") {
+    signals.theme = detectShopifyThemeName(rawHtml, lowerHtml, context) || "Unknown";
   }
 
   if (hasAny(text, ["free shipping", "free delivery"])) signals.badges.push("Free shipping");
@@ -1208,6 +1202,89 @@ function detectStoreStack(doc, text, html, url, context = null) {
   signals.badges = [...new Set(signals.badges)];
   signals.signals = [...new Set(signals.signals)];
   return signals;
+}
+
+function detectShopifyThemeName(rawHtml, lowerHtml, context = null) {
+  const combinedText = [
+    rawHtml,
+    context?.assetText || "",
+    context?.inlineText || "",
+    context?.resourceHints || ""
+  ].join(" ");
+
+  const directPatterns = [
+    /Shopify\.theme\s*=\s*\{[\s\S]{0,1200}?name\s*[:=]\s*["']([^"']+)["']/i,
+    /"theme"\s*:\s*\{[\s\S]{0,1200}?"name"\s*:\s*"([^"]+)"/i,
+    /"theme_name"\s*:\s*"([^"]+)"/i,
+    /data-theme-name\s*=\s*["']([^"']+)["']/i,
+    /theme-name["'\s:=>]+([A-Za-z][A-Za-z0-9\-\s]{1,60})/i,
+    /\/themes\/([A-Za-z0-9\-_% ]{2,80})\//i
+  ];
+
+  for (const pattern of directPatterns) {
+    const match = combinedText.match(pattern);
+    const normalized = normalizeThemeName(match?.[1]);
+    if (normalized) return normalized;
+  }
+
+  const knownThemes = [
+    "Dawn", "Sense", "Refresh", "Craft", "Studio", "Ride", "Taste", "Colorblock", "Crave", "Publisher", "Origin",
+    "Impulse", "Prestige", "Pipeline", "Motion", "Enterprise", "Symmetry", "Blockshop", "Warehouse", "Broadcast",
+    "Impact", "Focal", "Be Yours", "Local", "Expanse", "Turbo", "Flex", "Retina", "Parallax", "Streamline",
+    "Venue", "Icon", "Palo Alto", "Canopy", "District", "Empire", "Modular", "California", "Atlantic", "Editions",
+    "Baseline", "Emerge", "Testament", "Highlight", "Split", "Showcase", "Xtra", "Kalles", "Minimog", "Ella"
+  ];
+
+  for (const themeName of knownThemes) {
+    const escaped = escapeRegex(themeName.toLowerCase());
+    const broadMarkers = [
+      new RegExp(`shopify\.theme[\s\S]{0,600}${escaped}`, 'i'),
+      new RegExp(`theme[^\n\r<>{}]{0,80}${escaped}`, 'i'),
+      new RegExp(`/themes/${escaped.replace(/\ /g, '[\-_ ]')}(?:/|\.|\?)`, 'i'),
+      new RegExp(`(?:theme-name|theme_name|data-theme-name)[^\n\r]{0,80}${escaped}`, 'i')
+    ];
+    if (broadMarkers.some((regex) => regex.test(lowerHtml))) return themeName;
+  }
+
+  const themeStoreIdMap = new Map([
+    ['887', 'Dawn'],
+    ['1368', 'Sense'],
+    ['1431', 'Refresh'],
+    ['1351', 'Craft'],
+    ['1363', 'Studio'],
+    ['1355', 'Ride'],
+    ['1358', 'Taste'],
+    ['1434', 'Colorblock'],
+    ['1361', 'Crave'],
+    ['1366', 'Publisher'],
+    ['1359', 'Origin']
+  ]);
+  const storeIdMatch = combinedText.match(/theme_store_id\D{0,12}(\d{3,5})/i);
+  if (storeIdMatch && themeStoreIdMap.has(storeIdMatch[1])) {
+    return themeStoreIdMap.get(storeIdMatch[1]);
+  }
+
+  return "";
+}
+
+function normalizeThemeName(value) {
+  if (!value) return "";
+  const normalized = String(value)
+    .replace(/%20/g, ' ')
+    .replace(/[\/_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return "";
+  if (/^(templates?|sections?|snippets?|assets?|layout|config)$/i.test(normalized)) return "";
+  return normalized
+    .split(' ')
+    .map((part) => part ? part.charAt(0).toUpperCase() + part.slice(1).toLowerCase() : '')
+    .join(' ')
+    .replace(/Ui/g, 'UI');
+}
+
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function normalizeDiscoveredUrl(value, baseUrl) {
