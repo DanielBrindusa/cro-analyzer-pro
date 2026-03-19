@@ -11,9 +11,11 @@ const PRO_UNLOCK_STORAGE_KEY = "croProAccessUnlocked";
 const FETCH_TIMEOUT_MS = 12000;
 const SPEED_TIMEOUT_MS = 12000;
 const LINKED_RESOURCE_TIMEOUT_MS = 9000;
-const MAX_LINKED_STYLESHEETS = 2;
-const MAX_LINKED_SCRIPTS = 2;
+const MAX_LINKED_STYLESHEETS = 3;
+const MAX_LINKED_SCRIPTS = 3;
 const MAX_LINKED_RESOURCE_CHARS = 60000;
+const MAX_INLINE_TEXT_CHARS = 40000;
+const MAX_DISCOVERY_TEXT_URLS = 80;
 const MAX_AUTO_DISCOVERED_CATEGORIES = 5;
 const MAX_AUTO_DISCOVERED_PRODUCTS = 8;
 const MAX_DISCOVERY_SITEMAPS = 4;
@@ -496,9 +498,11 @@ async function runAnalysis() {
   if (homeSeedUrl && (!configuredPages.some((page) => page.type === "category") || !configuredPages.some((page) => page.type === "product"))) {
     updateProgress(0.4, Math.max((configuredPages.length || 1) + 4, 5), "Scanning the homepage for category and product URLs...");
     await waitForNextPaint();
-    const homeDiscoveryFetch = await fetchPageHtml(homeSeedUrl);
-    if (homeDiscoveryFetch.ok) {
-      STATE.discovered = discoverUrlsFromHtml(homeDiscoveryFetch.html, homeSeedUrl);
+    const discovered = await discoverUrlsAdvanced(homeSeedUrl, (message) => {
+      updateProgress(0.55, Math.max((configuredPages.length || 1) + 4, 5), message);
+    });
+    if ((discovered.categories || []).length || (discovered.products || []).length) {
+      STATE.discovered = discovered;
       renderDiscoveredUrls(STATE.discovered);
       autoFillDiscoveredUrls(STATE.discovered, plan);
       configuredPages = buildPageTargets();
@@ -721,11 +725,9 @@ function buildPageTargets() {
   return targets;
 }
 
+
 async function fetchPageHtml(url) {
-  const attempts = [
-    { type: "direct", url },
-    { type: "allorigins", url: `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}` }
-  ];
+  const attempts = buildFetchAttempts(url, { mode: "html" });
 
   for (const attempt of attempts) {
     const controller = new AbortController();
@@ -736,26 +738,81 @@ async function fetchPageHtml(url) {
       clearTimeout(timeoutId);
       if (!response.ok) continue;
       const text = await response.text();
-      if (text && text.length > 300) {
+      const normalized = normalizeFetchedPageMarkup(text, attempt.type, url, response.headers.get("content-type") || "");
+      if (normalized.html && normalized.html.length > 120) {
         return {
           ok: true,
           source: attempt.type,
-          html: text
+          html: normalized.html,
+          rawText: normalized.rawText,
+          mode: normalized.mode,
+          contentType: response.headers.get("content-type") || ""
         };
       }
     } catch (error) {
       clearTimeout(timeoutId);
-      // continue to the next attempt
     }
   }
 
   return {
     ok: false,
     html: "",
-    source: "blocked"
+    rawText: "",
+    source: "blocked",
+    mode: "none",
+    contentType: ""
   };
 }
 
+function buildFetchAttempts(url, options = {}) {
+  const normalized = String(url || "").trim();
+  if (!normalized) return [];
+  const attempts = [
+    { type: "direct", url: normalized },
+    { type: "allorigins", url: `https://api.allorigins.win/raw?url=${encodeURIComponent(normalized)}` },
+    { type: "codetabs", url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(normalized)}` }
+  ];
+
+  if (options.mode === "html") {
+    const jinaTarget = normalized.replace(/^https?:\/\//i, "");
+    attempts.push({ type: "jina", url: `https://r.jina.ai/http://${jinaTarget}` });
+  }
+
+  return attempts;
+}
+
+function normalizeFetchedPageMarkup(text, source, pageUrl, contentType = "") {
+  const raw = String(text || "");
+  if (!raw.trim()) return { html: "", rawText: "", mode: "empty" };
+
+  const looksLikeHtml = /<html[\s>]|<body[\s>]|<head[\s>]|<title[\s>]|<!doctype html/i.test(raw) || /text\/html/i.test(contentType);
+  if (looksLikeHtml) {
+    return { html: raw, rawText: stripHtmlToText(raw), mode: "html" };
+  }
+
+  if (source === "jina") {
+    const cleaned = raw
+      .replace(/^Title:\s*/im, "")
+      .replace(/^URL Source:\s*/im, "")
+      .replace(/^Markdown Content:\s*/im, "")
+      .trim();
+    const extractedLinks = [...new Set((cleaned.match(/https?:\/\/[^\s)\]>"']+/g) || []).slice(0, 40))];
+    const html = `<!doctype html><html><head><title>${escapeHtml(pageUrl)}</title></head><body><main><pre>${escapeHtml(cleaned.slice(0, MAX_LINKED_RESOURCE_CHARS))}</pre>${extractedLinks.map((link) => `<a href="${escapeAttribute(link)}">${escapeHtml(link)}</a>`).join("")}</main></body></html>`;
+    return { html, rawText: cleaned, mode: "text-proxy" };
+  }
+
+  const html = `<!doctype html><html><head><title>${escapeHtml(pageUrl)}</title></head><body><pre>${escapeHtml(raw.slice(0, MAX_LINKED_RESOURCE_CHARS))}</pre></body></html>`;
+  return { html, rawText: raw, mode: "text" };
+}
+
+function stripHtmlToText(html) {
+  return String(html || "")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 async function fetchPageSpeedScore(url) {
   try {
@@ -789,7 +846,7 @@ function getScreenshotUrl(url, provider = "primary") {
 }
 
 function detectStoreStack(doc, text, html, url, context = null) {
-  const lowerHtml = `${String(html || "").toLowerCase()} ${(context?.assetText || "").toLowerCase()} ${(context?.resourceHints || "").toLowerCase()}`;
+  const lowerHtml = `${String(html || "").toLowerCase()} ${(context?.assetText || "").toLowerCase()} ${(context?.inlineText || "").toLowerCase()} ${(context?.resourceHints || "").toLowerCase()}`;
   const hostname = safeHostname(url);
   const signals = { platform: "Unknown", theme: "Unknown", apps: [], badges: [], signals: [] };
 
@@ -807,7 +864,12 @@ function detectStoreStack(doc, text, html, url, context = null) {
     ["Stamped", /stamped/i],
     ["Afterpay / Clearpay", /afterpay|clearpay/i],
     ["Klarna", /klarna/i],
-    ["Shop Pay", /shop pay/i]
+    ["Shop Pay", /shop pay/i],
+    ["Okendo", /okendo/i],
+    ["Attentive", /attentive/i],
+    ["Gorgias", /gorgias/i],
+    ["Searchanise", /searchanise/i],
+    ["Nosto", /nosto/i]
   ];
   appTests.forEach(([name, regex]) => { if (regex.test(lowerHtml)) signals.apps.push(name); });
 
@@ -851,6 +913,7 @@ function normalizeDiscoveredUrl(value, baseUrl) {
   }
 }
 
+
 function classifyDiscoveredUrl(url, labelText = "") {
   try {
     const parsed = new URL(url);
@@ -862,16 +925,16 @@ function classifyDiscoveredUrl(url, labelText = "") {
       "/cart/", "/checkout/", "/account/", "/login/", "/register/", "/search/",
       "/policies/", "/policy/", "/privacy/", "/terms/", "/refund/", "/returns/",
       "/contact/", "/pages/", "/blogs/", "/blog/", "/articles/", "/collections/vendors",
-      "/collections/types", "/apps/", "/tools/"
+      "/collections/types", "/apps/", "/tools/", "/cdn/", "/service/", "/help/"
     ];
     if (excluded.some((fragment) => path.includes(fragment))) return null;
 
-    if (/(^|\/)(products?|item|items)(\/|$)/i.test(path)) return "product";
-    if (/(^|\/)(collections?|category|categories|catalog|catalogue|shop|store)(\/|$)/i.test(path)) return "category";
+    if (/(^|\/)(products?|product-detail|item|items|p|pdp)(\/|$)/i.test(path)) return "product";
+    if (/(^|\/)(collections?|category|categories|catalog|catalogue|shop|store|c)(\/|$)/i.test(path)) return "category";
+    if (/\b(add to cart|buy now|choose options?|quick add|shop now|view product|select options?)\b/i.test(combined)) return "product";
+    if (/\b(shop all|view all|collection|category|catalog|browse|explore range|all products?)\b/i.test(combined)) return "category";
 
-    if (/(add to cart|buy now|choose options?|quick add|shop now|view product)/i.test(combined)) return "product";
-    if (/(shop all|view all|collection|category|catalog|browse)/i.test(combined)) return "category";
-
+    if (parsed.search && /variant=|sku=|product/i.test(parsed.search)) return "product";
     return null;
   } catch (error) {
     return null;
@@ -910,6 +973,7 @@ function mergeDiscoveryResults(target, incoming) {
   return target;
 }
 
+
 function discoverUrlsFromHtml(html, baseUrl) {
   const discovered = createEmptyDiscoveryResult(baseUrl);
   try {
@@ -918,23 +982,34 @@ function discoverUrlsFromHtml(html, baseUrl) {
     const base = new URL(baseUrl);
     const linkMap = new Map();
 
-    [...doc.querySelectorAll('a[href]')].forEach((anchor) => {
-      const normalized = normalizeDiscoveredUrl(anchor.getAttribute("href"), base);
+    const rememberUrl = (candidate, label = "") => {
+      const normalized = normalizeDiscoveredUrl(candidate, base);
       if (!normalized || safeHostname(normalized) !== safeHostname(baseUrl)) return;
-      const label = `${anchor.textContent || ""} ${anchor.getAttribute("aria-label") || ""}`.trim();
-      if (!linkMap.has(normalized) || label.length > (linkMap.get(normalized)?.label || "").length) {
-        linkMap.set(normalized, { label });
+      const existing = linkMap.get(normalized);
+      const mergedLabel = [existing?.label || "", label].filter(Boolean).join(" ").trim();
+      if (!existing || mergedLabel.length > (existing?.label || "").length) {
+        linkMap.set(normalized, { label: mergedLabel });
       }
+    };
+
+    [...doc.querySelectorAll('a[href]')].forEach((anchor) => {
+      const label = `${anchor.textContent || ""} ${anchor.getAttribute("aria-label") || ""} ${anchor.getAttribute("title") || ""}`.trim();
+      rememberUrl(anchor.getAttribute("href"), label);
     });
 
-    [...doc.querySelectorAll('link[rel="canonical"], link[rel="alternate"]')].forEach((node) => {
-      const normalized = normalizeDiscoveredUrl(node.getAttribute("href"), base);
-      if (!normalized || safeHostname(normalized) !== safeHostname(baseUrl)) return;
-      if (!linkMap.has(normalized)) linkMap.set(normalized, { label: "" });
+    [...doc.querySelectorAll('link[rel="canonical"], link[rel="alternate"], meta[property="og:url"], meta[name="twitter:url"]')].forEach((node) => {
+      rememberUrl(node.getAttribute("href") || node.getAttribute("content") || "", "");
     });
 
-    discovered.debug.homepageLinksParsed = linkMap.size;
-    discovered.debug.sameDomainLinks = linkMap.size;
+    const textSources = [
+      html,
+      ...[...doc.querySelectorAll('script[type="application/json"], script[type="application/ld+json"], script:not([src])')]
+        .slice(0, 12)
+        .map((node) => (node.textContent || "").slice(0, MAX_INLINE_TEXT_CHARS))
+    ].join(" ");
+
+    const urlMatches = textSources.match(/https?:\/\/[^\s"'<>]+/g) || [];
+    urlMatches.slice(0, MAX_DISCOVERY_TEXT_URLS).forEach((value) => rememberUrl(value, "embedded-url"));
 
     const categories = [];
     const products = [];
@@ -945,8 +1020,13 @@ function discoverUrlsFromHtml(html, baseUrl) {
       if (type === "product" && products.length < MAX_AUTO_DISCOVERED_PRODUCTS) products.push(url);
     });
 
+    discovered.debug.homepageLinksParsed = linkMap.size;
+    discovered.debug.sameDomainLinks = linkMap.size;
     discovered.categories = [...new Set(categories)];
     discovered.products = [...new Set(products)];
+    if (!discovered.categories.length && !discovered.products.length) {
+      discovered.notes.push("The current site structure did not expose obvious product or category URLs in the fetched markup.");
+    }
     return discovered;
   } catch (error) {
     discovered.notes.push("The home page HTML could not be parsed for links.");
@@ -974,11 +1054,9 @@ function extractUrlsFromXml(text, baseUrl) {
   return { urls, sitemaps };
 }
 
+
 async function fetchTextResource(url) {
-  const attempts = [
-    { type: "direct", url },
-    { type: "allorigins", url: `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}` }
-  ];
+  const attempts = buildFetchAttempts(url, { mode: "text" });
 
   for (const attempt of attempts) {
     const controller = new AbortController();
@@ -997,29 +1075,26 @@ async function fetchTextResource(url) {
   return { ok: false, source: "blocked", text: "" };
 }
 
+
 async function inspectCandidateUrl(url) {
   const result = await fetchPageHtml(url);
   if (!result.ok) return null;
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(result.html, "text/html");
-    const bodyText = (doc.body?.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
-    const structuredData = extractStructuredData(doc);
-    const hasProductSchema = structuredData.some((item) => {
-      const typeValue = item?.["@type"];
-      return Array.isArray(typeValue)
-        ? typeValue.some((entry) => /product/i.test(String(entry || "")))
-        : /product/i.test(String(typeValue || ""));
-    });
-    const hasCategorySignals = hasAny(bodyText, ["filter", "sort", "shop all", "view all", "collections", "category"]) || !!doc.querySelector('select, [class*="filter" i], [data-filter]');
+    const context = await buildAnalysisContext(doc, result.html, url);
+    const bodyText = String(context.signalText || "").toLowerCase();
+    const hasProductSchema = hasStructuredDataType(context, "Product", "Offer");
+    const hasCategorySignals = hasAny(bodyText, ["filter", "sort", "shop all", "view all", "collections", "category", "browse"]) || !!doc.querySelector('select, [class*="filter" i], [data-filter], [data-sort]');
     const hasProductSignals = hasProductSchema
-      || hasAny(bodyText, ["add to cart", "buy now", "product details", "quantity"])
-      || !!doc.querySelector('button[name="add"], [data-add-to-cart], form[action*="/cart"]');
+      || hasAny(bodyText, ["add to cart", "buy now", "product details", "quantity", "variant", "size guide"])
+      || !!doc.querySelector('button[name="add"], [data-add-to-cart], form[action*="/cart"], [data-product], [itemtype*="Product"]');
 
     if (hasProductSignals && !hasCategorySignals) return "product";
     if (hasCategorySignals && !hasProductSignals) return "category";
     if (hasProductSignals) return "product";
-    return null;
+    if (hasCategorySignals) return "category";
+    return classifyDiscoveredUrl(url, bodyText);
   } catch (error) {
     return null;
   }
@@ -1439,9 +1514,9 @@ function renderInspectionQuality(report) {
       <span class="metric-sub">JSON-LD items used to enrich the audit</span>
     </article>
     <article class="inspection-card">
-      <span class="metric-label">Linked assets inspected</span>
+      <span class="metric-label">Extra sources inspected</span>
       <strong>${summary.assetCount}</strong>
-      <span class="metric-sub">Stylesheets and scripts checked when reachable</span>
+      <span class="metric-sub">Linked assets plus inline data used to strengthen the audit</span>
     </article>
   `;
 }
@@ -1779,7 +1854,7 @@ function buildInspectionSummary(pageResults) {
   const pageCount = pageResults.length;
   const fetchedPages = pageResults.filter((page) => page.fetchStatus?.startsWith("Fetched")).length;
   const structuredDataCount = pageResults.reduce((sum, page) => sum + ((page.structuredDataSummary || []).length), 0);
-  const assetCount = pageResults.reduce((sum, page) => sum + (page.resourceSummary?.assetCount || 0), 0);
+  const assetCount = pageResults.reduce((sum, page) => sum + ((page.resourceSummary?.assetCount || 0) + (page.resourceSummary?.inlineCount || 0)), 0);
   const avgReliability = pageCount
     ? Math.round(pageResults.reduce((sum, page) => sum + (page.reliability?.score || 0), 0) / pageCount)
     : 0;
@@ -1839,6 +1914,7 @@ function describeRuleEvidence(ruleDef, context, pageType, passed, fetchOk) {
   return sources.slice(0, 2).join(" · ") || `Checked parsed ${PAGE_LABELS[pageType].toLowerCase()} HTML only.`;
 }
 
+
 function buildFallbackAnalysisContext(doc, pageUrl) {
   return {
     url: pageUrl,
@@ -1846,65 +1922,178 @@ function buildFallbackAnalysisContext(doc, pageUrl) {
     metaDescription: "",
     signalText: (doc.body?.innerText || "").replace(/\s+/g, " ").toLowerCase(),
     structuredData: [],
-    resources: { css: [], scripts: [] },
-    resourceSummary: { assetCount: 0 },
+    resources: { css: [], scripts: [], inlineScripts: [], inlineStyles: [] },
+    resourceSummary: { assetCount: 0, inlineCount: 0, totalSources: 1 },
     evidenceBadges: ["HTML"],
     extractedSignals: [],
-    reliability: { score: 15, label: "Low" },
+    domStats: {},
+    reliability: { score: 18, label: "Low" },
     assetText: "",
-    resourceHints: ""
+    inlineText: "",
+    resourceHints: "",
+    fetchMode: "blocked"
   };
 }
 
 async function buildAnalysisContext(doc, html, pageUrl) {
   const title = (doc.querySelector("title")?.textContent || "").trim();
   const metaDescription = (doc.querySelector('meta[name="description"]')?.getAttribute("content") || "").trim();
-  const bodyText = (doc.body?.innerText || "").replace(/\s+/g, " ").trim();
-  const headingText = [...doc.querySelectorAll("h1, h2, h3")].map((el) => el.textContent.trim()).filter(Boolean).slice(0, 18).join(" ");
-  const buttonText = [...doc.querySelectorAll('button, [role="button"], a')].map((el) => el.textContent.trim()).filter(Boolean).slice(0, 30).join(" ");
-  const altText = [...doc.querySelectorAll("img[alt]")].map((el) => el.getAttribute("alt")?.trim()).filter(Boolean).slice(0, 20).join(" ");
+  const ogTitle = (doc.querySelector('meta[property="og:title"]')?.getAttribute("content") || "").trim();
+  const ogDescription = (doc.querySelector('meta[property="og:description"], meta[name="twitter:description"]')?.getAttribute("content") || "").trim();
+  const canonicalUrl = (doc.querySelector('link[rel="canonical"]')?.getAttribute("href") || "").trim();
+  const bodyText = ((doc.body?.innerText || stripHtmlToText(html) || "").replace(/\s+/g, " ").trim());
+  const headingText = [...doc.querySelectorAll("h1, h2, h3")].map((el) => el.textContent.trim()).filter(Boolean).slice(0, 25).join(" ");
+  const buttonText = [...doc.querySelectorAll('button, [role="button"], a, summary')].map((el) => el.textContent.trim()).filter(Boolean).slice(0, 45).join(" ");
+  const altText = [...doc.querySelectorAll("img[alt]")].map((el) => el.getAttribute("alt")?.trim()).filter(Boolean).slice(0, 30).join(" ");
   const structuredData = extractStructuredData(doc);
+  const inlineSignals = extractInlineSignals(doc, html, pageUrl);
   const linkedResources = await inspectLinkedResources(doc, pageUrl);
+  const domStats = collectDomStats(doc, structuredData);
   const jsonLdText = structuredData.map((item) => item.text).join(" ");
   const assetText = [
     ...linkedResources.css.map((item) => item.text),
     ...linkedResources.scripts.map((item) => item.text)
   ].join(" ");
-  const signalText = [bodyText, title, metaDescription, headingText, buttonText, altText, jsonLdText, assetText].join(" ").replace(/\s+/g, " ").toLowerCase();
-  const evidenceBadges = ["HTML", "Meta"];
+
+  const signalText = [
+    bodyText,
+    title,
+    metaDescription,
+    ogTitle,
+    ogDescription,
+    canonicalUrl,
+    headingText,
+    buttonText,
+    altText,
+    jsonLdText,
+    inlineSignals.text,
+    assetText,
+    inlineSignals.urlHints.join(" "),
+    linkedResources.urlHints.join(" ")
+  ].join(" ").replace(/\s+/g, " ").toLowerCase();
+
+  const evidenceBadges = ["HTML"];
+  if (title || metaDescription) evidenceBadges.push("Meta");
+  if (ogTitle || ogDescription) evidenceBadges.push("Open Graph");
   if (structuredData.length) evidenceBadges.push("JSON-LD");
+  if (inlineSignals.inlineScripts) evidenceBadges.push("Inline JS");
+  if (inlineSignals.inlineStyles) evidenceBadges.push("Inline CSS");
   if (linkedResources.css.length) evidenceBadges.push("CSS");
   if (linkedResources.scripts.length) evidenceBadges.push("JS");
+
   const extractedSignals = [
     title ? "Title" : "",
     metaDescription ? "Meta description" : "",
-    doc.querySelector('input[type="search"], [role="search"]') ? "Search input" : "",
-    doc.querySelector('button, [role="button"], a[href*="cart" i]') ? "CTA/button" : "",
+    ogTitle || ogDescription ? "Open Graph" : "",
+    domStats.searchInputs ? "Search input" : "",
+    domStats.ctaCount ? "CTA/button" : "",
+    domStats.forms ? "Form" : "",
+    domStats.productForms ? "Product form" : "",
     structuredData.some((item) => item.types.includes("Product")) ? "Product schema" : "",
-    structuredData.some((item) => item.types.includes("AggregateRating") || item.types.includes("Review")) ? "Review schema" : ""
+    structuredData.some((item) => item.types.includes("AggregateRating") || item.types.includes("Review")) ? "Review schema" : "",
+    domStats.reviewWidgets ? "Review widget" : "",
+    domStats.faqBlocks ? "FAQ content" : ""
   ].filter(Boolean);
-  const reliabilityScore = Math.max(25, Math.min(96, 30 + (bodyText ? 20 : 0) + (metaDescription ? 6 : 0) + (structuredData.length ? 18 : 0) + Math.min(16, linkedResources.assetCount * 4) + (title ? 6 : 0)));
+
+  const textStrength = Math.min(24, Math.round(bodyText.length / 220));
+  const structuredStrength = Math.min(18, structuredData.length * 5);
+  const linkedStrength = Math.min(16, linkedResources.assetCount * 4);
+  const inlineStrength = Math.min(12, inlineSignals.inlineScripts + inlineSignals.inlineStyles * 2 + Math.min(4, inlineSignals.urlHints.length > 0 ? 4 : 0));
+  const domStrength = Math.min(16, [domStats.ctaCount, domStats.forms, domStats.productForms, domStats.images > 2 ? 1 : 0, domStats.navLinks > 5 ? 1 : 0].reduce((sum, value) => sum + (value ? 3 : 0), 0));
+  const reliabilityScore = Math.max(28, Math.min(97,
+    20
+    + textStrength
+    + (title ? 5 : 0)
+    + (metaDescription ? 4 : 0)
+    + (ogTitle || ogDescription ? 4 : 0)
+    + structuredStrength
+    + linkedStrength
+    + inlineStrength
+    + domStrength
+  ));
+
   return {
     url: pageUrl,
     title,
     metaDescription,
+    ogTitle,
+    ogDescription,
+    canonicalUrl,
     signalText,
     structuredData,
     resources: linkedResources,
-    resourceSummary: { assetCount: linkedResources.assetCount },
+    resourceSummary: {
+      assetCount: linkedResources.assetCount,
+      inlineCount: inlineSignals.inlineScripts + inlineSignals.inlineStyles,
+      totalSources: linkedResources.assetCount + inlineSignals.inlineScripts + inlineSignals.inlineStyles + structuredData.length + 1
+    },
     evidenceBadges,
     extractedSignals,
+    domStats,
     reliability: {
       score: reliabilityScore,
       label: reliabilityScore >= 75 ? "High" : reliabilityScore >= 45 ? "Medium" : "Low"
     },
     assetText,
+    inlineText: inlineSignals.text,
     resourceHints: [
       ...linkedResources.css.map((item) => item.url),
       ...linkedResources.scripts.map((item) => item.url),
+      ...linkedResources.urlHints,
+      ...inlineSignals.urlHints,
       ...structuredData.flatMap((item) => item.types)
-    ].join(" ")
+    ].join(" "),
+    fetchMode: "parsed"
   };
+}
+
+function extractInlineSignals(doc, html, pageUrl) {
+  const inlineScripts = [...doc.querySelectorAll('script:not([src])')]
+    .map((node) => (node.textContent || "").trim())
+    .filter(Boolean)
+    .slice(0, 12)
+    .map((text) => text.slice(0, MAX_INLINE_TEXT_CHARS));
+  const inlineStyles = [...doc.querySelectorAll('style')]
+    .map((node) => (node.textContent || "").trim())
+    .filter(Boolean)
+    .slice(0, 4)
+    .map((text) => text.slice(0, MAX_INLINE_TEXT_CHARS / 2));
+  const appStateScripts = [...doc.querySelectorAll('script[type="application/json"], script[type*="json" i]')]
+    .map((node) => (node.textContent || "").trim())
+    .filter(Boolean)
+    .slice(0, 6)
+    .map((text) => text.slice(0, MAX_INLINE_TEXT_CHARS));
+
+  const combined = [...inlineScripts, ...inlineStyles, ...appStateScripts].join(" ");
+  const urlHints = extractEmbeddedUrlsFromText(combined, pageUrl).slice(0, MAX_DISCOVERY_TEXT_URLS);
+  return {
+    inlineScripts: inlineScripts.length + appStateScripts.length,
+    inlineStyles: inlineStyles.length,
+    text: combined,
+    urlHints
+  };
+}
+
+function collectDomStats(doc, structuredData) {
+  return {
+    headings: doc.querySelectorAll('h1, h2, h3').length,
+    buttons: doc.querySelectorAll('button, [role="button"]').length,
+    ctaCount: [...doc.querySelectorAll('button, a, [role="button"]')].filter((el) => /shop|buy|cart|checkout|discover|learn more|start|subscribe/i.test(el.textContent || "")).length,
+    forms: doc.querySelectorAll('form').length,
+    productForms: doc.querySelectorAll('form[action*="/cart"], [data-product], [itemtype*="Product"]').length + (structuredData.some((item) => item.types.includes('Product')) ? 1 : 0),
+    searchInputs: doc.querySelectorAll('input[type="search"], [role="search"], form[action*="search" i]').length,
+    navLinks: doc.querySelectorAll('header a[href], nav a[href]').length,
+    images: doc.querySelectorAll('img, picture source').length,
+    accordions: doc.querySelectorAll('details, summary, [aria-expanded]').length,
+    reviewWidgets: doc.querySelectorAll('[class*="review" i], [data-rating], [itemprop="review"], [itemprop="aggregateRating"]').length,
+    faqBlocks: doc.querySelectorAll('[class*="faq" i], [id*="faq" i], details').length,
+    trustMentions: [...doc.querySelectorAll('body *')].filter((el) => /secure|returns|refund|guarantee|shipping/i.test((el.textContent || "").slice(0, 80))).length
+  };
+}
+
+function extractEmbeddedUrlsFromText(text, baseUrl) {
+  const matches = String(text || "").match(/https?:\/\/[^\s"'<>]+|\/(products?|collections?|category|categories|catalog|shop|store|item|p)\/[^\s"'<>]+/gi) || [];
+  return [...new Set(matches.map((value) => normalizeDiscoveredUrl(value, baseUrl)).filter(Boolean))];
 }
 
 function extractStructuredData(doc) {
@@ -1936,20 +2125,28 @@ function collectJsonLdTypes(value, bucket) {
   if (value["@graph"]) collectJsonLdTypes(value["@graph"], bucket);
 }
 
+
 async function inspectLinkedResources(doc, pageUrl) {
   const cssUrls = getInspectableResourceUrls(doc, pageUrl, 'link[rel*="stylesheet"][href]', 'href', MAX_LINKED_STYLESHEETS);
   const scriptUrls = getInspectableResourceUrls(doc, pageUrl, 'script[src]', 'src', MAX_LINKED_SCRIPTS);
   const css = [];
   const scripts = [];
+  const urlHints = [];
   for (const url of cssUrls) {
     const text = await fetchLinkedResourceText(url);
-    if (text) css.push({ url, text });
+    if (text) {
+      css.push({ url, text });
+      urlHints.push(...extractEmbeddedUrlsFromText(text, pageUrl));
+    }
   }
   for (const url of scriptUrls) {
     const text = await fetchLinkedResourceText(url);
-    if (text) scripts.push({ url, text });
+    if (text) {
+      scripts.push({ url, text });
+      urlHints.push(...extractEmbeddedUrlsFromText(text, pageUrl));
+    }
   }
-  return { css, scripts, assetCount: css.length + scripts.length };
+  return { css, scripts, assetCount: css.length + scripts.length, urlHints: [...new Set(urlHints)].slice(0, MAX_DISCOVERY_TEXT_URLS) };
 }
 
 function getInspectableResourceUrls(doc, pageUrl, selector, attribute, limit) {
@@ -1969,13 +2166,14 @@ function getInspectableResourceUrls(doc, pageUrl, selector, attribute, limit) {
   return urls;
 }
 
+
 async function fetchLinkedResourceText(url) {
-  const attempts = [url, `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`];
+  const attempts = buildFetchAttempts(url, { mode: "text" });
   for (const attempt of attempts) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), LINKED_RESOURCE_TIMEOUT_MS);
     try {
-      const response = await fetch(attempt, { method: "GET", signal: controller.signal });
+      const response = await fetch(attempt.url, { method: "GET", signal: controller.signal });
       clearTimeout(timeoutId);
       if (!response.ok) continue;
       const text = await response.text();
