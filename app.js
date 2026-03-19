@@ -650,7 +650,7 @@ async function runAnalysis() {
         stackSummary = pageAnalysis.stack;
         progressUnits += 0.45;
         updateProgress(progressUnits, analysisTotalUnits, "Checking homepage performance signals...");
-        homePageSpeed = await fetchPageSpeedScore(target.url);
+        homePageSpeed = await measureHomepageSpeed(target.url, fetchResult);
       }
 
       totalChecks += pageAnalysis.appliedChecks.length;
@@ -886,7 +886,9 @@ async function fetchPageHtml(url) {
       source: "blocked",
       mode: "none",
       contentType: "",
-      url: ""
+      url: "",
+      timingMs: null,
+      transferBytes: 0
     };
   }
 
@@ -902,10 +904,12 @@ async function fetchPageHtml(url) {
       const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
       try {
-        const response = await fetch(attempt.url, { method: "GET", signal: controller.signal });
+        const startedAt = performance.now();
+        const response = await fetch(attempt.url, { method: "GET", signal: controller.signal, cache: "no-store" });
         clearTimeout(timeoutId);
         if (!response.ok) continue;
         const text = await response.text();
+        const timingMs = Math.round(performance.now() - startedAt);
         const normalized = normalizeFetchedPageMarkup(text, attempt.type, normalizedUrl, response.headers.get("content-type") || "");
         if (normalized.html && normalized.html.length > 120) {
           return {
@@ -916,7 +920,9 @@ async function fetchPageHtml(url) {
             mode: normalized.mode,
             contentType: response.headers.get("content-type") || "",
             url: normalizedUrl,
-            finalUrl: response.url || normalizedUrl
+            finalUrl: response.url || normalizedUrl,
+            timingMs,
+            transferBytes: getApproxByteSize(text)
           };
         }
       } catch (error) {
@@ -932,7 +938,9 @@ async function fetchPageHtml(url) {
       mode: "none",
       contentType: "",
       url: normalizedUrl,
-      finalUrl: normalizedUrl
+      finalUrl: normalizedUrl,
+      timingMs: null,
+      transferBytes: 0
     };
   })();
 
@@ -997,7 +1005,7 @@ async function fetchPageSpeedScore(url) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), SPEED_TIMEOUT_MS);
     const endpoint = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?strategy=mobile&url=${encodeURIComponent(url)}`;
-    const response = await fetch(endpoint, { signal: controller.signal });
+    const response = await fetch(endpoint, { signal: controller.signal, cache: "no-store" });
     clearTimeout(timeoutId);
     if (!response.ok) return null;
 
@@ -1007,11 +1015,106 @@ async function fetchPageSpeedScore(url) {
 
     return {
       score: Math.round(score * 100),
-      source: "Google PageSpeed"
+      source: "Google PageSpeed",
+      method: "pagespeed",
+      note: "Google PageSpeed mobile score"
     };
   } catch (error) {
     return null;
   }
+}
+
+function getApproxByteSize(value) {
+  try {
+    return new Blob([String(value || "")]).size;
+  } catch (error) {
+    return String(value || "").length;
+  }
+}
+
+function scoreFetchTimeMs(timingMs) {
+  const ms = Number(timingMs);
+  if (!Number.isFinite(ms) || ms <= 0) return 55;
+  if (ms <= 800) return 96;
+  if (ms <= 1200) return 90;
+  if (ms <= 1800) return 82;
+  if (ms <= 2500) return 74;
+  if (ms <= 3500) return 64;
+  if (ms <= 5000) return 52;
+  if (ms <= 7000) return 38;
+  return 24;
+}
+
+function estimateHomepageSpeedFromFetchResult(fetchResult) {
+  if (!fetchResult?.ok || !fetchResult?.html) return null;
+
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(fetchResult.html, "text/html");
+    const imageCount = doc.querySelectorAll("img").length;
+    const stylesheetCount = doc.querySelectorAll('link[rel*="stylesheet"][href]').length;
+    const scriptNodes = [...doc.querySelectorAll("script")];
+    const linkedScriptCount = scriptNodes.filter((node) => !!node.getAttribute("src")).length;
+    const renderBlockingScriptCount = scriptNodes.filter((node) => {
+      if (!node.getAttribute("src")) return false;
+      return !node.hasAttribute("async") && !node.hasAttribute("defer") && node.getAttribute("type") !== "module";
+    }).length;
+    const lazyImageCount = doc.querySelectorAll('img[loading="lazy"]').length;
+    const htmlBytes = Number(fetchResult.transferBytes) || getApproxByteSize(fetchResult.html);
+    const assetCount = stylesheetCount + linkedScriptCount + imageCount;
+    const inlineJsBytes = getApproxByteSize(scriptNodes.filter((node) => !node.getAttribute("src")).map((node) => node.textContent || "").join("\n"));
+    const inlineCssBytes = getApproxByteSize([...doc.querySelectorAll("style")].map((node) => node.textContent || "").join("\n"));
+
+    let score = scoreFetchTimeMs(fetchResult.timingMs);
+    score -= Math.max(0, Math.min(16, Math.round((htmlBytes - 70000) / 22000)));
+    score -= Math.max(0, Math.min(18, Math.round((assetCount - 20) * 0.65)));
+    score -= Math.max(0, Math.min(12, Math.round((imageCount - 12) * 0.55)));
+    score -= Math.max(0, Math.min(10, renderBlockingScriptCount * 2));
+    score -= Math.max(0, Math.min(8, Math.round((inlineJsBytes - 30000) / 12000)));
+    score -= Math.max(0, Math.min(6, Math.round((inlineCssBytes - 15000) / 7000)));
+
+    if (imageCount && lazyImageCount / imageCount >= 0.5) score += 3;
+    if (assetCount <= 18) score += 2;
+    if (htmlBytes <= 90000) score += 2;
+
+    const normalizedScore = Math.max(12, Math.min(96, Math.round(score)));
+    const sourceMap = {
+      direct: "Live homepage fetch estimate",
+      allorigins: "Homepage fetch estimate",
+      codetabs: "Homepage fetch estimate",
+      jina: "Homepage content estimate",
+      "jina-protocol": "Homepage content estimate"
+    };
+
+    return {
+      score: normalizedScore,
+      source: sourceMap[fetchResult.source] || "Homepage speed estimate",
+      method: "estimated",
+      note: `Estimated from homepage response time, HTML size, and ${assetCount} detected assets`,
+      metrics: {
+        timingMs: Number(fetchResult.timingMs) || null,
+        htmlBytes,
+        assetCount,
+        imageCount,
+        stylesheetCount,
+        linkedScriptCount,
+        renderBlockingScriptCount
+      }
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+async function measureHomepageSpeed(url, existingFetchResult = null) {
+  const pageSpeed = await fetchPageSpeedScore(url);
+  if (pageSpeed) return pageSpeed;
+
+  const fetchResult = existingFetchResult?.ok ? existingFetchResult : await fetchPageHtml(url);
+  const estimated = estimateHomepageSpeedFromFetchResult(fetchResult);
+  if (estimated) return estimated;
+
+  return null;
 }
 
 function getScreenshotUrl(url, provider = "primary") {
@@ -1545,7 +1648,7 @@ async function analyzeCompetitor(url, plan) {
   const general = await analyzePage("general", fetchResult, plan);
   const totalWeight = home.totalWeight + general.totalWeight;
   const scoreWeight = home.scoreWeight + general.scoreWeight;
-  const speed = await fetchPageSpeedScore(url);
+  const speed = await measureHomepageSpeed(url, fetchResult);
   return {
     url,
     fetched: fetchResult.ok,
@@ -1761,13 +1864,15 @@ function renderHomeSpeedMetric(homePageSpeed) {
   const score = typeof homePageSpeed === "number"
     ? homePageSpeed
     : (homePageSpeed && typeof homePageSpeed.score === "number" ? homePageSpeed.score : null);
+  const source = homePageSpeed && typeof homePageSpeed === "object" ? homePageSpeed.source : "";
+  const note = homePageSpeed && typeof homePageSpeed === "object" ? homePageSpeed.note : "";
 
   speedCard.classList.remove("speed-good", "speed-medium", "speed-bad", "speed-unknown");
   speedCard.classList.add(getSpeedClass(score));
 
   scoreElement.textContent = score != null ? `${score}/100` : "Unavailable";
   labelElement.textContent = score != null
-    ? `${getSpeedMessage(score)} · Google PageSpeed mobile score`
+    ? `${getSpeedMessage(score)}${source ? ` · ${source}` : ""}${note ? ` · ${note}` : ""}`
     : getSpeedMessage(score);
 
   let gauge = speedCard.querySelector(".speed-meter");
