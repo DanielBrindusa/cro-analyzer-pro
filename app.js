@@ -38,7 +38,7 @@ const MULTI_PART_TLDS = [
 ];
 
 const PAGE_TYPES = ["home", "category", "product", "cart"];
-const FREE_PLAN_MAX_RECOMMENDATIONS = 10;
+const FREE_PLAN_MAX_RECOMMENDATIONS = 1000;
 const PAGE_LABELS = {
   general: "General",
   home: "Home page",
