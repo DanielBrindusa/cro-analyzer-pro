@@ -1,12 +1,14 @@
 
 
 const STATE = {
-  plan: "pro",
+  plan: "free",
   latestReport: null,
   productRows: 0,
   progress: null
 };
 
+const PRO_PAYMENT_LINK = "REPLACE_WITH_YOUR_STRIPE_PAYMENT_LINK";
+const PRO_UNLOCK_STORAGE_KEY = "croProAccessUnlocked";
 const FETCH_TIMEOUT_MS = 12000;
 const SPEED_TIMEOUT_MS = 12000;
 const LINKED_RESOURCE_TIMEOUT_MS = 9000;
@@ -26,6 +28,8 @@ const PAGE_FETCH_CACHE = new Map();
 const TEXT_FETCH_CACHE = new Map();
 
 
+const FREE_PLAN_USAGE_KEY = "croFreePlanUsageLedger";
+const FREE_PLAN_USAGE_COOKIE = "croFreePlanUsageLedger";
 const MULTI_PART_TLDS = [
   "co.uk", "org.uk", "gov.uk", "ac.uk",
   "com.au", "net.au", "org.au",
@@ -34,6 +38,7 @@ const MULTI_PART_TLDS = [
 ];
 
 const PAGE_TYPES = ["home", "category", "product", "cart"];
+const FREE_PLAN_MAX_RECOMMENDATIONS = 1000;
 const PAGE_LABELS = {
   general: "General",
   home: "Home page",
@@ -299,6 +304,10 @@ function ensureInitialUrlInputs() {
     addProductRow();
   }
 
+  if (STATE.plan === "pro" && document.getElementById("productUrlList") && getProductInputs().length < 2) {
+    addProductRow();
+  }
+
   if (document.getElementById("categoryUrlList") && getCategoryInputs().length === 0) {
     addCategoryRow();
   }
@@ -309,7 +318,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindUI();
   await loadAdsConfig();
   initAdSlots();
-  setPlan("pro");
+  setPlan("free");
   ensureInitialUrlInputs();
   renderSavedReports();
   renderTrendChart();
@@ -339,38 +348,70 @@ function bindUI() {
 }
 
 function setPlan(plan) {
-  STATE.plan = "pro";
-  document.getElementById("freePlanCard")?.classList.remove("featured");
-  document.getElementById("proPlanCard")?.classList.add("featured");
+  STATE.plan = plan;
+  document.getElementById("freePlanCard")?.classList.toggle("featured", plan === "free");
+  document.getElementById("proPlanCard")?.classList.toggle("featured", plan === "pro");
   enforceProductLimit();
   enforceCategoryLimit();
+  renderProPaymentState();
   ensureInitialUrlInputs();
 }
 
 
 function isProUnlocked() {
-  return true;
+  try {
+    return localStorage.getItem(PRO_UNLOCK_STORAGE_KEY) === "true";
+  } catch (error) {
+    return false;
+  }
 }
 
 function unlockPro() {
-  return true;
+  try {
+    localStorage.setItem(PRO_UNLOCK_STORAGE_KEY, "true");
+  } catch (error) {}
 }
 
 function handlePaymentReturn() {
-  return true;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("payment") === "success" && params.get("plan") === "pro") {
+      unlockPro();
+      const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.hash || ""}`;
+      window.history.replaceState({}, document.title, cleanUrl);
+    }
+  } catch (error) {}
 }
 
 function renderProPaymentState() {
   const proButton = document.querySelector('.plan-button[data-plan="pro"]');
   if (proButton) {
-    proButton.textContent = "Included";
+    proButton.textContent = isProUnlocked() ? "Use Pro" : "Unlock Pro";
   }
 }
 
-function startProPayment() {
-  setPlan("pro");
-}
 
+function startProPayment() {
+  if (isProUnlocked()) {
+    setPlan("pro");
+    return;
+  }
+
+  STATE.plan = "free";
+  document.getElementById("freePlanCard")?.classList.add("featured");
+  document.getElementById("proPlanCard")?.classList.remove("featured");
+  renderProPaymentState();
+
+  if (!PRO_PAYMENT_LINK || PRO_PAYMENT_LINK.includes("REPLACE_WITH_YOUR_STRIPE_PAYMENT_LINK")) {
+    alert("Add your real Stripe payment link in app.js before using the Pro payment flow. Until payment is completed, only the Free version stays available.");
+    return;
+  }
+
+  const paymentWindow = window.open(PRO_PAYMENT_LINK, "_blank", "noopener,noreferrer,width=980,height=820");
+  if (!paymentWindow) {
+    window.location.href = PRO_PAYMENT_LINK;
+  }
+}
 
 function addCategoryRow(value = "") {
   const list = document.getElementById("categoryUrlList");
@@ -498,8 +539,13 @@ function checkAnalysisDeadline(startedAt, maxRuntimeMs = ANALYSIS_MAX_RUNTIME_MS
 async function runAnalysis() {
   const analyzeButton = document.getElementById("analyzeButton");
   const discoverButton = document.getElementById("discoverButton");
-  const plan = "pro";
+  const plan = STATE.plan;
   setPlan(plan);
+
+  if (plan === "pro" && !isProUnlocked()) {
+    alert("Please complete the Pro payment first. Until payment is completed, only the Free version is available.");
+    return;
+  }
 
   const projectName = document.getElementById("projectName").value.trim() || "Untitled CRO audit";
   let configuredPages = buildPageTargets();
@@ -512,6 +558,12 @@ async function runAnalysis() {
   const estimatedPostUnits = 4 + (competitorUrl ? 2 : 0);
   const estimatedTotalUnits = Math.max(estimatedDiscoveryUnits + estimatedPageUnits + estimatedPostUnits, 8);
   const startedAt = Date.now();
+
+  const freePlanGuard = validateFreePlanScope(plan, configuredPages);
+  if (!freePlanGuard.allowed) {
+    alert(freePlanGuard.message);
+    return;
+  }
 
   analyzeButton.disabled = true;
   if (discoverButton) discoverButton.disabled = true;
@@ -557,7 +609,7 @@ async function runAnalysis() {
       await waitForNextPaint();
     }
 
-    const relevantChecklist = window.CRO_CHECKLIST.slice();
+    const relevantChecklist = window.CRO_CHECKLIST.filter((item) => plan === "pro" || item.tier === "basic");
     const pageResults = [];
     const recommendations = [];
     let totalChecks = 0;
@@ -598,7 +650,7 @@ async function runAnalysis() {
         stackSummary = pageAnalysis.stack;
         progressUnits += 0.45;
         updateProgress(progressUnits, analysisTotalUnits, "Checking homepage performance signals...");
-        homePageSpeed = await fetchPageSpeedScore(target.url, pageAnalysis, fetchResult);
+        homePageSpeed = await fetchPageSpeedScore(target.url);
       }
 
       totalChecks += pageAnalysis.appliedChecks.length;
@@ -638,8 +690,8 @@ async function runAnalysis() {
       if (impactDelta !== 0) return impactDelta;
       return (b.priority || 0) - (a.priority || 0);
     });
-    const recommendationLimit = cleanedRecommendations.length;
-    const topRecommendations = cleanedRecommendations.slice();
+    const recommendationLimit = plan === "pro" ? 20 : FREE_PLAN_MAX_RECOMMENDATIONS;
+    const topRecommendations = cleanedRecommendations.slice(0, recommendationLimit);
 
     if (competitorUrl) {
       checkAnalysisDeadline(startedAt);
@@ -648,6 +700,10 @@ async function runAnalysis() {
       updateProgress(progressUnits, analysisTotalUnits, "Benchmarking competitor signals...");
       competitorReport = await analyzeCompetitor(competitorUrl, plan);
       progressUnits += 1.2;
+    }
+
+    if (plan === "free") {
+      persistFreePlanScope(configuredPages);
     }
 
     const overallScore = totalAvailableWeight ? Math.round((totalPassedWeight / totalAvailableWeight) * 100) : 0;
@@ -846,12 +902,10 @@ async function fetchPageHtml(url) {
       const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
       try {
-        const startedAt = (typeof performance !== "undefined" && typeof performance.now === "function") ? performance.now() : Date.now();
         const response = await fetch(attempt.url, { method: "GET", signal: controller.signal });
         clearTimeout(timeoutId);
         if (!response.ok) continue;
         const text = await response.text();
-        const endedAt = (typeof performance !== "undefined" && typeof performance.now === "function") ? performance.now() : Date.now();
         const normalized = normalizeFetchedPageMarkup(text, attempt.type, normalizedUrl, response.headers.get("content-type") || "");
         if (normalized.html && normalized.html.length > 120) {
           return {
@@ -862,12 +916,7 @@ async function fetchPageHtml(url) {
             mode: normalized.mode,
             contentType: response.headers.get("content-type") || "",
             url: normalizedUrl,
-            finalUrl: response.url || normalizedUrl,
-            fetchMetrics: {
-              durationMs: Math.max(1, Math.round(endedAt - startedAt)),
-              transferBytes: text.length,
-              fetchedVia: attempt.type
-            }
+            finalUrl: response.url || normalizedUrl
           };
         }
       } catch (error) {
@@ -883,8 +932,7 @@ async function fetchPageHtml(url) {
       mode: "none",
       contentType: "",
       url: normalizedUrl,
-      finalUrl: normalizedUrl,
-      fetchMetrics: null
+      finalUrl: normalizedUrl
     };
   })();
 
@@ -944,83 +992,26 @@ function stripHtmlToText(html) {
     .trim();
 }
 
-async function fetchPageSpeedScore(url, pageAnalysis = null, fetchResult = null) {
+async function fetchPageSpeedScore(url) {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), SPEED_TIMEOUT_MS);
     const endpoint = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?strategy=mobile&url=${encodeURIComponent(url)}`;
     const response = await fetch(endpoint, { signal: controller.signal });
     clearTimeout(timeoutId);
+    if (!response.ok) return null;
 
-    if (response.ok) {
-      const data = await response.json();
-      const score = data?.lighthouseResult?.categories?.performance?.score;
-      if (typeof score === "number") {
-        return {
-          score: Math.round(score * 100),
-          source: "Google PageSpeed",
-          method: "lab",
-          strategy: "mobile"
-        };
-      }
-    }
+    const data = await response.json();
+    const score = data?.lighthouseResult?.categories?.performance?.score;
+    if (typeof score !== "number") return null;
+
+    return {
+      score: Math.round(score * 100),
+      source: "Google PageSpeed"
+    };
   } catch (error) {
-    // Fall back to an on-the-fly estimate below.
+    return null;
   }
-
-  return estimateHomePageSpeedFromAvailableSignals(url, pageAnalysis, fetchResult);
-}
-
-function estimateHomePageSpeedFromAvailableSignals(url, pageAnalysis = null, fetchResult = null) {
-  const fetchDuration = Number(fetchResult?.fetchMetrics?.durationMs) || null;
-  const transferBytes = Number(fetchResult?.fetchMetrics?.transferBytes) || fetchResult?.html?.length || 0;
-  const assetCount = Number(pageAnalysis?.resourceSummary?.assetCount) || 0;
-  const inlineCount = Number(pageAnalysis?.resourceSummary?.inlineCount) || 0;
-  const imageCount = Number(pageAnalysis?.domStats?.images) || 0;
-  const scriptCount = Number(pageAnalysis?.resources?.scripts?.length) || 0;
-  const cssCount = Number(pageAnalysis?.resources?.css?.length) || 0;
-  const fetchMode = fetchResult?.mode || pageAnalysis?.fetchMode || "unknown";
-
-  const hasEnoughSignals = fetchDuration != null || transferBytes > 0 || assetCount > 0 || imageCount > 0;
-  if (!hasEnoughSignals) return null;
-
-  let score = 100;
-
-  if (fetchDuration != null) {
-    if (fetchDuration <= 700) score -= 0;
-    else if (fetchDuration <= 1200) score -= 8;
-    else if (fetchDuration <= 1800) score -= 16;
-    else if (fetchDuration <= 2500) score -= 24;
-    else if (fetchDuration <= 3500) score -= 36;
-    else if (fetchDuration <= 5000) score -= 48;
-    else if (fetchDuration <= 8000) score -= 62;
-    else score -= 74;
-  } else {
-    score -= 22;
-  }
-
-  score -= Math.min(18, Math.round(transferBytes / 50000));
-  score -= Math.min(16, Math.max(0, assetCount - 6));
-  score -= Math.min(10, Math.max(0, imageCount - 10));
-  score -= Math.min(8, Math.max(0, (scriptCount + cssCount) - 8));
-  score -= Math.min(6, Math.max(0, inlineCount - 6));
-
-  if (fetchMode === "text-proxy") score -= 6;
-  if (fetchResult?.source && fetchResult.source !== "direct") score -= 4;
-
-  const normalizedScore = Math.max(8, Math.min(96, Math.round(score)));
-  const detailParts = [];
-  if (fetchDuration != null) detailParts.push(`${fetchDuration} ms homepage fetch`);
-  if (assetCount) detailParts.push(`${assetCount} linked assets`);
-  if (imageCount) detailParts.push(`${imageCount} images detected`);
-
-  return {
-    score: normalizedScore,
-    source: "Estimated homepage speed",
-    method: "estimated-fetch",
-    strategy: "homepage",
-    detail: detailParts.join(" · ") || shortDisplayUrl(url)
-  };
 }
 
 function getScreenshotUrl(url, provider = "primary") {
@@ -1032,15 +1023,109 @@ function getScreenshotUrl(url, provider = "primary") {
   return `https://image.thum.io/get/width/1400/noanimate/${normalizedUrl}`;
 }
 
+const KNOWN_SHOPIFY_THEMES = [
+  "Dawn", "Refresh", "Sense", "Craft", "Studio", "Ride", "Origin", "Publisher",
+  "Impulse", "Prestige", "Focal", "Motion", "Symmetry", "Warehouse", "Broadcast",
+  "Streamline", "Turbo", "Flex", "Retina", "Pipeline", "Showcase", "Impact",
+  "Enterprise", "Venue", "Icon", "Local", "Expanse", "Modular", "Parallax",
+  "Palo Alto", "Testament"
+];
+
+function normalizeThemeToken(value) {
+  return String(value || "")
+    .replace(/[+_]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\btheme\b/gi, " ")
+    .replace(/[^a-z0-9 -]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function toTitleCase(value) {
+  return String(value || "")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function matchKnownShopifyTheme(rawName = "") {
+  const normalized = normalizeThemeToken(rawName).toLowerCase();
+  if (!normalized) return "";
+  const squashed = normalized.replace(/\s+/g, "");
+  const match = KNOWN_SHOPIFY_THEMES.find((name) => {
+    const normalizedName = name.toLowerCase();
+    return normalizedName === normalized || normalizedName.replace(/\s+/g, "") === squashed;
+  });
+  return match || "";
+}
+
+function extractExplicitShopifyThemeName(html, context = null) {
+  const combined = [String(html || ""), String(context?.assetText || ""), String(context?.inlineText || ""), String(context?.resourceHints || "")].join(" ");
+  const explicitPatterns = [
+    /Shopify\.theme\s*=\s*\{[^}]{0,800}?["']name["']\s*:\s*["']([^"']{2,80})["']/i,
+    /["']theme(?:Name|_name)?["']\s*:\s*["']([^"']{2,80})["']/i,
+    /data-theme-name\s*=\s*["']([^"']{2,80})["']/i,
+    /themeName\s*=\s*["']([^"']{2,80})["']/i,
+    /\/themes?\/([a-z0-9][a-z0-9-]{2,40})(?:\/|\.(?:css|js))/i
+  ];
+  for (const regex of explicitPatterns) {
+    const match = combined.match(regex);
+    if (!match) continue;
+    const normalized = normalizeThemeToken(match[1]);
+    if (!normalized || normalized.length < 3) continue;
+    const known = matchKnownShopifyTheme(normalized);
+    return known || toTitleCase(normalized);
+  }
+  return "";
+}
+
+function detectKnownShopifyTheme(html, context = null) {
+  const combined = [String(html || ""), String(context?.assetText || ""), String(context?.inlineText || ""), String(context?.resourceHints || "")].join(" ");
+  let bestTheme = "";
+  let bestScore = 0;
+
+  for (const themeName of KNOWN_SHOPIFY_THEMES) {
+    const slug = themeName.toLowerCase().replace(/\s+/g, "-");
+    const compact = themeName.toLowerCase().replace(/\s+/g, "");
+    const spaced = themeName.replace(/\s+/g, "\\s+");
+    const patterns = [
+      new RegExp(`["']name["']\\s*:\\s*["']${spaced}["']`, "i"),
+      new RegExp(`["']theme(?:name|_name)?["']\\s*:\\s*["']${spaced}["']`, "i"),
+      new RegExp(`/(?:${slug}|${compact})(?:[._-][a-z0-9_-]+)?\\.(?:css|js)\\b`, "i"),
+      new RegExp(`\\b${spaced}\\b(?=[^a-z0-9]|$)`, "i")
+    ];
+
+    let score = 0;
+    if (patterns[0].test(combined)) score += 4;
+    if (patterns[1].test(combined)) score += 4;
+    if (patterns[2].test(combined)) score += 2;
+    if (patterns[3].test(combined) && /(shopify|theme|cdn\/shop|assets)/i.test(combined)) score += 1;
+
+    if (score > bestScore) {
+      bestTheme = themeName;
+      bestScore = score;
+    }
+  }
+
+  return bestScore >= 2 ? bestTheme : "";
+}
+
 function detectStoreStack(doc, text, html, url, context = null) {
   const lowerHtml = `${String(html || "").toLowerCase()} ${(context?.assetText || "").toLowerCase()} ${(context?.inlineText || "").toLowerCase()} ${(context?.resourceHints || "").toLowerCase()}`;
   const hostname = safeHostname(url);
   const signals = { platform: "Unknown", theme: "Unknown", apps: [], badges: [], signals: [] };
 
-  if (/cdn\.shopify\.com|shopify\.theme|x-shopify-stage|shopify-payment-button/i.test(html)) signals.platform = "Shopify";
+  if (/cdn\.shopify\.com|shopify\.theme|x-shopify-stage|shopify-payment-button|myshopify\.com|\/cdn\/shop\//i.test(lowerHtml) || /shopify/i.test(hostname)) signals.platform = "Shopify";
   else if (/woocommerce|wp-content\/plugins\/woocommerce/i.test(lowerHtml)) signals.platform = "WooCommerce";
   else if (/bigcommerce/i.test(lowerHtml)) signals.platform = "BigCommerce";
-  else if (/myshopify\.com/i.test(lowerHtml) || /shopify/i.test(hostname)) signals.platform = "Shopify";
+
+  if (signals.platform === "Shopify") {
+    const explicitTheme = extractExplicitShopifyThemeName(html, context);
+    const patternTheme = detectKnownShopifyTheme(html, context);
+    signals.theme = explicitTheme || patternTheme || "Unknown";
+  }
 
   const appTests = [
     ["judge.me", /judge\.me/i],
@@ -1059,17 +1144,6 @@ function detectStoreStack(doc, text, html, url, context = null) {
     ["Nosto", /nosto/i]
   ];
   appTests.forEach(([name, regex]) => { if (regex.test(lowerHtml)) signals.apps.push(name); });
-
-  const themePatterns = [
-    ["Dawn", /theme_store_id.*?887|"name"\s*:\s*"dawn"/i],
-    ["Impulse", /impulse/i],
-    ["Prestige", /prestige/i],
-    ["Refresh", /refresh/i],
-    ["Turbo", /turbo/i]
-  ];
-  for (const [name, regex] of themePatterns) {
-    if (regex.test(lowerHtml)) { signals.theme = name; break; }
-  }
 
   if (hasAny(text, ["free shipping", "free delivery"])) signals.badges.push("Free shipping");
   if (hasAny(text, ["money-back", "money back", "guarantee"])) signals.badges.push("Guarantee");
@@ -1471,7 +1545,7 @@ async function analyzeCompetitor(url, plan) {
   const general = await analyzePage("general", fetchResult, plan);
   const totalWeight = home.totalWeight + general.totalWeight;
   const scoreWeight = home.scoreWeight + general.scoreWeight;
-  const speed = await fetchPageSpeedScore(url, home, fetchResult);
+  const speed = await fetchPageSpeedScore(url);
   return {
     url,
     fetched: fetchResult.ok,
@@ -1692,12 +1766,8 @@ function renderHomeSpeedMetric(homePageSpeed) {
   speedCard.classList.add(getSpeedClass(score));
 
   scoreElement.textContent = score != null ? `${score}/100` : "Unavailable";
-  const sourceLabel = homePageSpeed?.source || "Homepage speed";
-  const methodDetail = homePageSpeed?.method === "estimated-fetch"
-    ? (homePageSpeed?.detail || "Estimated from homepage fetch timing and page weight signals")
-    : "Google PageSpeed mobile score";
   labelElement.textContent = score != null
-    ? `${getSpeedMessage(score)} · ${sourceLabel} · ${methodDetail}`
+    ? `${getSpeedMessage(score)} · Google PageSpeed mobile score`
     : getSpeedMessage(score);
 
   let gauge = speedCard.querySelector(".speed-meter");
@@ -2589,23 +2659,107 @@ function truncateText(value, maxLength = 90) {
 }
 
 function validateFreePlanScope(plan, configuredPages) {
+  if (plan !== "free") {
+    return { allowed: true };
+  }
+
+  const normalizedUrls = configuredPages
+    .map((page) => normalizeAuditUrl(page.url))
+    .filter(Boolean);
+
+  if (!normalizedUrls.length) {
+    return { allowed: true };
+  }
+
+  const storefronts = [...new Set(normalizedUrls.map((item) => item.storefrontKey))];
+  if (storefronts.length > 1) {
+    return {
+      allowed: false,
+      message: "Free plan can analyze only one storefront at a time. Please keep all URLs on the same storefront or switch to Pro."
+    };
+  }
+
+
+  const storefrontKey = storefronts[0];
+  const ledger = getFreePlanUsageLedger();
+  const existingEntry = ledger[storefrontKey];
+
+  if (!existingEntry) {
+    return { allowed: true };
+  }
+
+  const currentSet = [...new Set(normalizedUrls.map((item) => item.pageKey))].sort();
+  const lockedSet = [...new Set(existingEntry.pageKeys || [])].sort();
+  const isSameSet = currentSet.length === lockedSet.length && currentSet.every((value, index) => value === lockedSet[index]);
+
+  if (!isSameSet) {
+    return {
+      allowed: false,
+      message: `Free plan already locked a storefront sample for ${storefrontKey}. You can re-run the same saved sample, but you cannot add new page URLs little by little to audit the full site. Upgrade to Pro to analyze additional pages.`
+    };
+  }
+
   return { allowed: true };
 }
 
 function persistFreePlanScope(configuredPages) {
-  return true;
+  const normalizedUrls = configuredPages
+    .map((page) => normalizeAuditUrl(page.url))
+    .filter(Boolean);
+
+  if (!normalizedUrls.length) return;
+
+  const storefrontKey = normalizedUrls[0].storefrontKey;
+  const ledger = getFreePlanUsageLedger();
+  const pageKeys = [...new Set(normalizedUrls.map((item) => item.pageKey))].sort();
+  const entry = ledger[storefrontKey] || {
+    storefrontKey,
+    firstLockedAt: new Date().toISOString()
+  };
+
+  entry.pageKeys = pageKeys;
+  entry.lastUsedAt = new Date().toISOString();
+  entry.urlCount = pageKeys.length;
+  ledger[storefrontKey] = entry;
+
+  writeFreePlanUsageLedger(ledger);
 }
 
 function getFreePlanUsageLedger() {
-  return {};
+  const combined = [
+    readJsonStorage(localStorage, FREE_PLAN_USAGE_KEY),
+    readJsonStorage(sessionStorage, FREE_PLAN_USAGE_KEY),
+    readCookieJson(FREE_PLAN_USAGE_COOKIE)
+  ];
+
+  return combined.reduce((acc, part) => mergeUsageLedgers(acc, part), {});
 }
 
 function writeFreePlanUsageLedger(ledger) {
-  return true;
+  const serialized = JSON.stringify(ledger);
+  try {
+    localStorage.setItem(FREE_PLAN_USAGE_KEY, serialized);
+  } catch (error) {}
+  try {
+    sessionStorage.setItem(FREE_PLAN_USAGE_KEY, serialized);
+  } catch (error) {}
+  setCookie(FREE_PLAN_USAGE_COOKIE, serialized, 3650);
 }
 
 function mergeUsageLedgers(base, extra) {
-  return { ...(base || {}), ...(extra || {}) };
+  const output = { ...(base || {}) };
+  Object.entries(extra || {}).forEach(([storefrontKey, entry]) => {
+    const current = output[storefrontKey];
+    if (!current) {
+      output[storefrontKey] = entry;
+      return;
+    }
+
+    const currentTime = Date.parse(current.lastUsedAt || current.firstLockedAt || 0) || 0;
+    const incomingTime = Date.parse(entry.lastUsedAt || entry.firstLockedAt || 0) || 0;
+    output[storefrontKey] = incomingTime >= currentTime ? { ...current, ...entry } : { ...entry, ...current };
+  });
+  return output;
 }
 
 function readJsonStorage(storage, key) {
