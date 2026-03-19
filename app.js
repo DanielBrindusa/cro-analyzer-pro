@@ -315,6 +315,7 @@ function ensureInitialUrlInputs() {
 
 
 document.addEventListener("DOMContentLoaded", async () => {
+  clearLegacyProjectLimits();
   bindUI();
   await loadAdsConfig();
   initAdSlots();
@@ -2827,70 +2828,21 @@ function truncateText(value, maxLength = 90) {
 }
 
 function validateFreePlanScope(plan, configuredPages) {
-  if (plan !== "free") {
-    return { allowed: true };
-  }
-
-  const normalizedUrls = configuredPages
-    .map((page) => normalizeAuditUrl(page.url))
-    .filter(Boolean);
-
-  if (!normalizedUrls.length) {
-    return { allowed: true };
-  }
-
-  const storefronts = [...new Set(normalizedUrls.map((item) => item.storefrontKey))];
-  if (storefronts.length > 1) {
-    return {
-      allowed: false,
-      message: "Free plan can analyze only one storefront at a time. Please keep all URLs on the same storefront or switch to Pro."
-    };
-  }
-
-
-  const storefrontKey = storefronts[0];
-  const ledger = getFreePlanUsageLedger();
-  const existingEntry = ledger[storefrontKey];
-
-  if (!existingEntry) {
-    return { allowed: true };
-  }
-
-  const currentSet = [...new Set(normalizedUrls.map((item) => item.pageKey))].sort();
-  const lockedSet = [...new Set(existingEntry.pageKeys || [])].sort();
-  const isSameSet = currentSet.length === lockedSet.length && currentSet.every((value, index) => value === lockedSet[index]);
-
-  if (!isSameSet) {
-    return {
-      allowed: false,
-      message: `Free plan already locked a storefront sample for ${storefrontKey}. You can re-run the same saved sample, but you cannot add new page URLs little by little to audit the full site. Upgrade to Pro to analyze additional pages.`
-    };
-  }
-
   return { allowed: true };
 }
 
 function persistFreePlanScope(configuredPages) {
-  const normalizedUrls = configuredPages
-    .map((page) => normalizeAuditUrl(page.url))
-    .filter(Boolean);
+  return;
+}
 
-  if (!normalizedUrls.length) return;
-
-  const storefrontKey = normalizedUrls[0].storefrontKey;
-  const ledger = getFreePlanUsageLedger();
-  const pageKeys = [...new Set(normalizedUrls.map((item) => item.pageKey))].sort();
-  const entry = ledger[storefrontKey] || {
-    storefrontKey,
-    firstLockedAt: new Date().toISOString()
-  };
-
-  entry.pageKeys = pageKeys;
-  entry.lastUsedAt = new Date().toISOString();
-  entry.urlCount = pageKeys.length;
-  ledger[storefrontKey] = entry;
-
-  writeFreePlanUsageLedger(ledger);
+function clearLegacyProjectLimits() {
+  try {
+    localStorage.removeItem(FREE_PLAN_USAGE_KEY);
+  } catch (error) {}
+  try {
+    sessionStorage.removeItem(FREE_PLAN_USAGE_KEY);
+  } catch (error) {}
+  setCookie(FREE_PLAN_USAGE_COOKIE, "", -1);
 }
 
 function getFreePlanUsageLedger() {
