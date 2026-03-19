@@ -3,13 +3,30 @@
 const STATE = {
   plan: "free",
   latestReport: null,
-  productRows: 0
+  productRows: 0,
+  progress: null
 };
 
 const PRO_PAYMENT_LINK = "REPLACE_WITH_YOUR_STRIPE_PAYMENT_LINK";
 const PRO_UNLOCK_STORAGE_KEY = "croProAccessUnlocked";
 const FETCH_TIMEOUT_MS = 12000;
 const SPEED_TIMEOUT_MS = 12000;
+const LINKED_RESOURCE_TIMEOUT_MS = 9000;
+const MAX_LINKED_STYLESHEETS = 5;
+const MAX_LINKED_SCRIPTS = 5;
+const MAX_LINKED_RESOURCE_CHARS = 80000;
+const MAX_INLINE_TEXT_CHARS = 60000;
+const MAX_DISCOVERY_TEXT_URLS = 120;
+const MAX_AUTO_DISCOVERED_CATEGORIES = 5;
+const MAX_AUTO_DISCOVERED_PRODUCTS = 8;
+const MAX_DISCOVERY_SITEMAPS = 6;
+const MAX_DISCOVERY_URLS_FROM_SITEMAP = 400;
+const MAX_DISCOVERY_CANDIDATE_PAGES = 14;
+const RESOURCE_FETCH_CONCURRENCY = 4;
+const ANALYSIS_MAX_RUNTIME_MS = 10 * 60 * 1000;
+const PAGE_FETCH_CACHE = new Map();
+const TEXT_FETCH_CACHE = new Map();
+
 
 const FREE_PLAN_USAGE_KEY = "croFreePlanUsageLedger";
 const FREE_PLAN_USAGE_COOKIE = "croFreePlanUsageLedger";
@@ -102,7 +119,7 @@ const AUTOMATED_CHECKS = {
       const h1 = doc.querySelector("h1");
       return !!h1 && h1.textContent.trim().length <= 65;
     }),
-    rule("product-price", "Product price is visible", 3, "basic", ({ text, context }) => hasCurrency(text) || hasStructuredDataType(context, "Offer", "Product")),
+    rule("product-price", "Product price is visible", 3, "basic", ({ text, context }) => hasCurrency(text) || hasStructuredDataType(context, "Offer")),
     rule("product-atc", "Add to cart CTA is visible", 3, "basic", ({ text, doc }) => hasAny(text, ["add to cart", "buy now", "pre-order"]) || !!doc.querySelector('button[name="add"], [data-add-to-cart]')),
     rule("product-gallery", "Product page contains multiple visuals", 2, "basic", ({ doc }) => doc.querySelectorAll("img").length >= 3),
     rule("product-reviews", "Reviews or ratings are visible", 3, "basic", ({ text, context }) => hasAny(text, ["reviews", "rated", "stars", "customer review", "read review"]) || hasStructuredDataType(context, "AggregateRating", "Review")),
@@ -456,8 +473,72 @@ function waitForNextPaint() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
+function formatDuration(ms) {
+  const safe = Math.max(0, Number(ms) || 0);
+  const totalSeconds = Math.ceil(safe / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    const remMinutes = minutes % 60;
+    return `${hours}h ${String(remMinutes).padStart(2, "0")}m`;
+  }
+  if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  return `${seconds}s`;
+}
+
+function buildProgressStatusText(baseStatus) {
+  const meta = STATE.progress;
+  const status = String(baseStatus || "").trim();
+  if (!meta?.startedAt || meta?.done || meta?.failed) return status;
+
+  const elapsed = Date.now() - meta.startedAt;
+  const currentUnits = Math.max(0, Number(meta.currentUnits) || 0);
+  const totalUnits = Math.max(1, Number(meta.totalUnits) || 1);
+  const remainingByCap = Math.max(0, (meta.maxRuntimeMs || ANALYSIS_MAX_RUNTIME_MS) - elapsed);
+  let etaText = "Calculating...";
+
+  if (currentUnits >= 0.5 && elapsed >= 3000) {
+    const unitsPerMs = currentUnits / elapsed;
+    if (unitsPerMs > 0) {
+      const predicted = ((totalUnits - currentUnits) / unitsPerMs);
+      const bounded = Math.max(0, Math.min(predicted, remainingByCap || predicted));
+      etaText = formatDuration(bounded);
+    }
+  }
+
+  const elapsedText = formatDuration(elapsed);
+  const parts = [status];
+  if (meta.phaseLabel) parts.push(`Phase: ${meta.phaseLabel}`);
+  parts.push(`Elapsed: ${elapsedText}`);
+  parts.push(`Estimated time left: ${etaText}`);
+  parts.push(`Max runtime: ${formatDuration(meta.maxRuntimeMs || ANALYSIS_MAX_RUNTIME_MS)}`);
+  return parts.filter(Boolean).join(" • ");
+}
+
+function updateProgressTimerDisplay() {
+  const statusNode = document.getElementById("progressStatus");
+  if (!statusNode) return;
+  const meta = STATE.progress;
+  if (!meta?.baseStatus || meta.done || meta.failed) return;
+  statusNode.textContent = buildProgressStatusText(meta.baseStatus);
+}
+
+function setProgressPhase(phaseLabel) {
+  if (!STATE.progress) return;
+  STATE.progress.phaseLabel = phaseLabel || "";
+  updateProgressTimerDisplay();
+}
+
+function checkAnalysisDeadline(startedAt, maxRuntimeMs = ANALYSIS_MAX_RUNTIME_MS) {
+  if ((Date.now() - startedAt) > maxRuntimeMs) {
+    throw new Error(`Analysis exceeded the maximum runtime of ${formatDuration(maxRuntimeMs)}.`);
+  }
+}
+
 async function runAnalysis() {
   const analyzeButton = document.getElementById("analyzeButton");
+  const discoverButton = document.getElementById("discoverButton");
   const plan = STATE.plan;
   setPlan(plan);
 
@@ -470,6 +551,13 @@ async function runAnalysis() {
   let configuredPages = buildPageTargets();
   const notes = document.getElementById("manualNotes").value.trim();
   const competitorUrl = document.getElementById("competitorUrl")?.value.trim() || "";
+  const homeSeedUrl = document.getElementById("homeUrl")?.value.trim() || configuredPages.find((page) => page.type === "home")?.url || "";
+  const shouldRunDiscovery = !!homeSeedUrl;
+  const estimatedDiscoveryUnits = shouldRunDiscovery ? 12 : 0;
+  const estimatedPageUnits = Math.max(configuredPages.length, 1) * 3.2;
+  const estimatedPostUnits = 4 + (competitorUrl ? 2 : 0);
+  const estimatedTotalUnits = Math.max(estimatedDiscoveryUnits + estimatedPageUnits + estimatedPostUnits, 8);
+  const startedAt = Date.now();
 
   const freePlanGuard = validateFreePlanScope(plan, configuredPages);
   if (!freePlanGuard.allowed) {
@@ -478,23 +566,49 @@ async function runAnalysis() {
   }
 
   analyzeButton.disabled = true;
-  startProgress(Math.max((configuredPages.length || 1) + 4, 5));
-  setProgressValue(4, "Starting analysis...", "Preparing your audit and checking the provided URLs.");
+  if (discoverButton) discoverButton.disabled = true;
+  startProgress(estimatedTotalUnits, { maxRuntimeMs: ANALYSIS_MAX_RUNTIME_MS });
+  setProgressPhase(shouldRunDiscovery ? "Discovery" : "Analysis");
+  updateProgress(0.3, estimatedTotalUnits, shouldRunDiscovery
+    ? "Starting URL discovery and preparing the CRO analysis..."
+    : "Preparing your audit and checking the provided URLs...");
   await waitForNextPaint();
 
-  const homeSeedUrl = document.getElementById("homeUrl")?.value.trim() || configuredPages.find((page) => page.type === "home")?.url || "";
-  if (homeSeedUrl && (!configuredPages.some((page) => page.type === "category") || !configuredPages.some((page) => page.type === "product"))) {
-    updateProgress(0.4, Math.max((configuredPages.length || 1) + 4, 5), "Discovering category and product URLs...");
-    await waitForNextPaint();
-    STATE.discovered = await discoverUrlsForAudit(homeSeedUrl);
-    renderDiscoveredUrls(STATE.discovered);
-    autoFillDiscoveredUrls(STATE.discovered, plan);
-    configuredPages = buildPageTargets();
-    updateProgress(0.8, Math.max((configuredPages.length || 1) + 4, 5), "Suggested URLs found. Preparing the full analysis...");
-    await waitForNextPaint();
-  }
-
   try {
+    if (shouldRunDiscovery) {
+      renderDiscoveredUrls({
+        categories: STATE.discovered?.categories || [],
+        products: STATE.discovered?.products || [],
+        status: "Starting URL discovery...",
+        notes: ["The app is discovering URLs first, then it will continue automatically into the CRO analysis."]
+      });
+      const discoveryBase = 0.6;
+      const discoverySpan = estimatedDiscoveryUnits;
+      const discovered = await discoverUrlsAdvanced(homeSeedUrl, (payload) => {
+        const info = typeof payload === "string" ? { message: payload } : (payload || {});
+        const step = Number(info.step) || 0;
+        const totalSteps = Math.max(Number(info.totalSteps) || 1, 1);
+        const message = info.message || "Discovering URLs...";
+        setProgressPhase("Discovery");
+        updateProgress(discoveryBase + ((step / totalSteps) * discoverySpan), estimatedTotalUnits, message);
+        if (info.notes || info.preview) {
+          renderDiscoveredUrls({
+            categories: info.preview?.categories || STATE.discovered?.categories || [],
+            products: info.preview?.products || STATE.discovered?.products || [],
+            status: message,
+            notes: info.notes || ["The app is still scanning the store structure."]
+          });
+        }
+      });
+      checkAnalysisDeadline(startedAt);
+      STATE.discovered = discovered;
+      renderDiscoveredUrls(discovered);
+      autoFillDiscoveredUrls(discovered, plan);
+      configuredPages = buildPageTargets();
+      updateProgress(discoveryBase + discoverySpan, estimatedTotalUnits, "URL discovery finished. Preparing the full CRO analysis...");
+      await waitForNextPaint();
+    }
+
     const relevantChecklist = window.CRO_CHECKLIST.filter((item) => plan === "pro" || item.tier === "basic");
     const pageResults = [];
     const recommendations = [];
@@ -505,19 +619,27 @@ async function runAnalysis() {
     let stackSummary = null;
     let homePageSpeed = null;
     let competitorReport = null;
+    let progressUnits = shouldRunDiscovery ? estimatedDiscoveryUnits + 1 : 1;
+    const analysisTotalUnits = Math.max(estimatedTotalUnits, progressUnits + (Math.max(configuredPages.length, 1) * 3.2) + estimatedPostUnits);
 
     if (!configuredPages.length) {
-      updateProgress(1, 1, "No page URLs were provided. Building a manual CRO review report...");
+      setProgressPhase("Analysis");
+      updateProgress(progressUnits, analysisTotalUnits, "No page URLs were provided. Building a manual CRO review report...");
       await wait(350);
+      progressUnits += 0.5;
     }
 
     for (let index = 0; index < configuredPages.length; index += 1) {
+      checkAnalysisDeadline(startedAt);
       const target = configuredPages[index];
-      updateProgress(index, configuredPages.length, `Fetching ${target.label}...`);
+      setProgressPhase(`Analysis • ${target.label}`);
+      updateProgress(progressUnits, analysisTotalUnits, `Fetching ${target.label}...`);
       const fetchResult = await fetchPageHtml(target.url);
       fetchResult.url = target.url;
-      updateProgress(index + 0.5, configuredPages.length, `Scoring ${target.label}...`);
-      const pageAnalysis = analyzePage(target.type, fetchResult, plan);
+
+      progressUnits += 1.1;
+      updateProgress(progressUnits, analysisTotalUnits, `Scoring ${target.label}...`);
+      const pageAnalysis = await analyzePage(target.type, fetchResult, plan);
 
       pageResults.push({
         ...target,
@@ -526,7 +648,8 @@ async function runAnalysis() {
 
       if (target.type === "home" && pageAnalysis.stack) {
         stackSummary = pageAnalysis.stack;
-        updateProgress(index + 0.75, configuredPages.length + 2, "Checking homepage performance signals...");
+        progressUnits += 0.45;
+        updateProgress(progressUnits, analysisTotalUnits, "Checking homepage performance signals...");
         homePageSpeed = await fetchPageSpeedScore(target.url);
       }
 
@@ -544,11 +667,15 @@ async function runAnalysis() {
         });
       });
 
-      updateProgress(index + 1, configuredPages.length, `${target.label} analyzed.`);
-      await wait(150);
+      progressUnits += 1.35;
+      updateProgress(progressUnits, analysisTotalUnits, `${target.label} analyzed.`);
+      await wait(120);
     }
 
-    updateProgress(configuredPages.length || 1, configuredPages.length || 1, "Compiling CRO recommendations...");
+    checkAnalysisDeadline(startedAt);
+    setProgressPhase("Recommendations");
+    progressUnits += 0.6;
+    updateProgress(progressUnits, analysisTotalUnits, "Compiling CRO recommendations...");
     const manualChecklist = relevantChecklist.filter((item) => {
       if (item.page === "general") return true;
       if (item.page === "product") return configuredPages.some((p) => p.type === "product");
@@ -566,6 +693,15 @@ async function runAnalysis() {
     const recommendationLimit = plan === "pro" ? 20 : FREE_PLAN_MAX_RECOMMENDATIONS;
     const topRecommendations = cleanedRecommendations.slice(0, recommendationLimit);
 
+    if (competitorUrl) {
+      checkAnalysisDeadline(startedAt);
+      setProgressPhase("Competitor benchmark");
+      progressUnits += 0.8;
+      updateProgress(progressUnits, analysisTotalUnits, "Benchmarking competitor signals...");
+      competitorReport = await analyzeCompetitor(competitorUrl, plan);
+      progressUnits += 1.2;
+    }
+
     if (plan === "free") {
       persistFreePlanScope(configuredPages);
     }
@@ -577,8 +713,6 @@ async function runAnalysis() {
       projectName,
       plan,
       notes,
-      
-      
       overallScore,
       checksUsed: totalChecks,
       pagesAnalyzed: configuredPages.length,
@@ -591,8 +725,13 @@ async function runAnalysis() {
       homePageSpeed,
       competitorReport,
       discovered: STATE.discovered,
-      revenueOpportunity: estimateRevenueOpportunity(overallScore, criticalIssues, configuredPages.length)
+      revenueOpportunity: estimateRevenueOpportunity(overallScore, criticalIssues, configuredPages.length),
+      inspectionSummary: buildInspectionSummary(pageResults)
     };
+
+    setProgressPhase("Finalizing report");
+    progressUnits = Math.min(analysisTotalUnits - 0.25, progressUnits + 0.8);
+    updateProgress(progressUnits, analysisTotalUnits, "Finalizing the CRO report and saving it locally...");
 
     hydrateReportLinks(report);
     STATE.latestReport = report;
@@ -601,12 +740,17 @@ async function runAnalysis() {
     renderSavedReports();
     completeProgress(`Analysis complete. ${report.pagesAnalyzed} page${report.pagesAnalyzed === 1 ? "" : "s"} processed.`);
   } catch (error) {
-    failProgress("The analysis stopped unexpectedly. Please try again.");
+    const timeoutHit = String(error?.message || "").includes("maximum runtime") || String(error?.message || "").includes("exceeded the maximum runtime");
+    failProgress(timeoutHit
+      ? `The analysis reached the ${formatDuration(ANALYSIS_MAX_RUNTIME_MS)} time limit before finishing. Try fewer pages or rerun the audit.`
+      : "The analysis stopped unexpectedly. Please try again.");
     console.error(error);
   } finally {
     analyzeButton.disabled = false;
+    if (discoverButton) discoverButton.disabled = false;
   }
 }
+
 
 
 
@@ -627,21 +771,45 @@ function revealAnalysisProgress() {
   panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-function startProgress(totalSteps) {
+function startProgress(totalSteps, options = {}) {
   const panel = document.getElementById("analysisProgress");
   panel.classList.remove("hidden");
+  STATE.progress = {
+    startedAt: Date.now(),
+    totalUnits: Math.max(Number(totalSteps) || 1, 1),
+    currentUnits: 0,
+    baseStatus: "The app is getting your audit ready.",
+    phaseLabel: "Preparing",
+    maxRuntimeMs: options.maxRuntimeMs || ANALYSIS_MAX_RUNTIME_MS,
+    timerId: null,
+    done: false,
+    failed: false
+  };
   setProgressValue(3, "Preparing analysis...", "The app is getting your audit ready.");
   panel.dataset.totalSteps = String(Math.max(totalSteps, 1));
+  if (STATE.progress.timerId) clearInterval(STATE.progress.timerId);
+  STATE.progress.timerId = setInterval(updateProgressTimerDisplay, 1000);
   revealAnalysisProgress();
 }
 
 function updateProgress(completedSteps, totalSteps, statusText) {
   const safeTotal = Math.max(totalSteps, 1);
   const ratio = Math.max(0.08, Math.min(completedSteps / safeTotal, 0.94));
+  if (STATE.progress) {
+    STATE.progress.totalUnits = safeTotal;
+    STATE.progress.currentUnits = Math.max(0, completedSteps);
+    STATE.progress.baseStatus = statusText;
+  }
   setProgressValue(Math.round(ratio * 100), "Running analysis...", statusText);
 }
 
 function completeProgress(statusText) {
+  if (STATE.progress?.timerId) clearInterval(STATE.progress.timerId);
+  if (STATE.progress) {
+    STATE.progress.done = true;
+    STATE.progress.currentUnits = STATE.progress.totalUnits;
+    STATE.progress.baseStatus = statusText;
+  }
   setProgressValue(100, "Analysis complete", statusText);
   revealAnalysisProgress();
 }
@@ -650,6 +818,11 @@ function failProgress(statusText) {
   const title = document.getElementById("progressTitle");
   title.textContent = "Analysis failed";
   title.classList.add("progress-error");
+  if (STATE.progress?.timerId) clearInterval(STATE.progress.timerId);
+  if (STATE.progress) {
+    STATE.progress.failed = true;
+    STATE.progress.baseStatus = statusText;
+  }
   setProgressValue(100, "Analysis failed", statusText);
   revealAnalysisProgress();
 }
@@ -665,7 +838,7 @@ function setProgressValue(percent, titleText, statusText) {
   title.textContent = titleText;
   title.classList.remove("progress-error");
   percentLabel.textContent = `${clamped}%`;
-  status.textContent = statusText;
+  status.textContent = buildProgressStatusText(statusText);
   fill.style.width = `${clamped}%`;
   track.setAttribute("aria-valuenow", String(clamped));
 }
@@ -699,298 +872,125 @@ function buildPageTargets() {
       targets.push({ type: "product", label: `Product page ${index + 1}`, url });
     });
 
-  const seen = new Set();
-  return targets
-    .map((target) => {
-      try {
-        const normalizedUrl = new URL(target.url).toString();
-        return { ...target, url: normalizedUrl };
-      } catch (error) {
-        return target;
-      }
-    })
-    .filter((target) => {
-      const key = `${target.type}::${target.url}`;
-      if (!target.url || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+  return targets;
 }
 
-function readStableHtmlCache() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(STABLE_HTML_CACHE_KEY) || "{}");
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch (error) {
-    return {};
-  }
-}
 
-function writeStableHtmlCache(cache) {
-  try {
-    const entries = Object.entries(cache || {})
-      .sort((a, b) => (b[1]?.savedAt || 0) - (a[1]?.savedAt || 0))
-      .slice(0, STABLE_CACHE_MAX_ENTRIES);
-    localStorage.setItem(STABLE_HTML_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
-  } catch (error) {
-    // Ignore storage errors in locked-down browsers.
-  }
-}
-
-function normalizeFetchedHtml(html) {
-  return String(html || "")
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, (match) => match.length > 20000 ? match.slice(0, 20000) : match)
-    .replace(/nonce=(['"]).*?\1/gi, 'nonce=""')
-    .replace(/integrity=(['"]).*?\1/gi, 'integrity=""')
-    .replace(/\bdata-time(?:stamp)?=(['"]).*?\1/gi, 'data-time=""');
-}
-
-function scoreHtmlQuality(html) {
-  const lower = String(html || "").toLowerCase();
-  if (!lower || lower.length < 300) return 0;
-  let score = Math.min(60, Math.floor(lower.length / 3000));
-  if (/<title[\s>]/i.test(lower)) score += 8;
-  if (/<h1[\s>]/i.test(lower)) score += 8;
-  if (/add to cart|buy now|product|collection|checkout|price|review/i.test(lower)) score += 12;
-  if (/application\/ld\+json/i.test(lower)) score += 8;
-  if (/<meta[^>]+description/i.test(lower)) score += 4;
-  if (/<a[\s>]/i.test(lower)) score += 3;
-  return score;
-}
-
-function getStableFetchCacheKey(url) {
-  try {
-    const parsed = new URL(url);
-    return `${parsed.origin}${parsed.pathname}${parsed.search}`;
-  } catch (error) {
-    return String(url || "").trim();
-  }
-}
-
-function getCachedFetchResult(url) {
-  const cacheKey = getStableFetchCacheKey(url);
-  const sessionCached = PAGE_FETCH_CACHE.get(cacheKey);
-  if (sessionCached && (Date.now() - (sessionCached.savedAt || 0)) < STABLE_CACHE_TTL_MS) {
-    return { ...sessionCached, fromCache: true, cacheLayer: "memory" };
-  }
-
-  const persistentCache = readStableHtmlCache();
-  const entry = persistentCache[cacheKey];
-  if (entry && (Date.now() - (entry.savedAt || 0)) < STABLE_CACHE_TTL_MS) {
-    PAGE_FETCH_CACHE.set(cacheKey, entry);
-    return { ...entry, fromCache: true, cacheLayer: "storage" };
-  }
-
-  return null;
-}
-
-function persistFetchResult(url, result) {
-  if (!result?.ok || !result?.html) return;
-  const cacheKey = getStableFetchCacheKey(url);
-  const payload = {
-    ok: true,
-    html: normalizeFetchedHtml(result.html),
-    source: result.source || "direct",
-    url: result.url || url,
-    qualityScore: result.qualityScore || scoreHtmlQuality(result.html),
-    savedAt: Date.now(),
-    attemptedSources: result.attemptedSources || [result.source || "direct"]
-  };
-  PAGE_FETCH_CACHE.set(cacheKey, payload);
-  const persistentCache = readStableHtmlCache();
-  persistentCache[cacheKey] = payload;
-  writeStableHtmlCache(persistentCache);
-}
-
-async function fetchTextCandidate(url, label) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const response = await fetch(url, { method: "GET", signal: controller.signal, cache: "no-store" });
-    clearTimeout(timeoutId);
-    if (!response.ok) return null;
-    const text = await response.text();
-    if (!text || text.length < 300) return null;
-    const normalized = normalizeFetchedHtml(text);
+async function fetchPageHtml(url) {
+  const normalizedUrl = String(url || "").trim();
+  if (!normalizedUrl) {
     return {
-      ok: true,
-      html: normalized,
-      source: label,
-      qualityScore: scoreHtmlQuality(normalized),
-      attemptedSources: [label]
+      ok: false,
+      html: "",
+      rawText: "",
+      source: "blocked",
+      mode: "none",
+      contentType: "",
+      url: ""
     };
-  } catch (error) {
-    clearTimeout(timeoutId);
-    return null;
   }
+
+  if (PAGE_FETCH_CACHE.has(normalizedUrl)) {
+    return PAGE_FETCH_CACHE.get(normalizedUrl);
+  }
+
+  const request = (async () => {
+    const attempts = buildFetchAttempts(normalizedUrl, { mode: "html" });
+
+    for (const attempt of attempts) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+      try {
+        const response = await fetch(attempt.url, { method: "GET", signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!response.ok) continue;
+        const text = await response.text();
+        const normalized = normalizeFetchedPageMarkup(text, attempt.type, normalizedUrl, response.headers.get("content-type") || "");
+        if (normalized.html && normalized.html.length > 120) {
+          return {
+            ok: true,
+            source: attempt.type,
+            html: normalized.html,
+            rawText: normalized.rawText,
+            mode: normalized.mode,
+            contentType: response.headers.get("content-type") || "",
+            url: normalizedUrl,
+            finalUrl: response.url || normalizedUrl
+          };
+        }
+      } catch (error) {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    return {
+      ok: false,
+      html: "",
+      rawText: "",
+      source: "blocked",
+      mode: "none",
+      contentType: "",
+      url: normalizedUrl,
+      finalUrl: normalizedUrl
+    };
+  })();
+
+  PAGE_FETCH_CACHE.set(normalizedUrl, request);
+  return request;
 }
 
-async function fetchBestLiveHtml(url) {
-  const normalizedTarget = getStableFetchCacheKey(url);
+function buildFetchAttempts(url, options = {}) {
+  const normalized = String(url || "").trim();
+  if (!normalized) return [];
+  const noScheme = normalized.replace(/^https?:\/\//i, "");
+  const protocol = /^http:\/\//i.test(normalized) ? "http" : "https";
   const attempts = [
-    { type: "direct", url: normalizedTarget },
-    { type: "allorigins", url: `https://api.allorigins.win/raw?url=${encodeURIComponent(normalizedTarget)}` },
-    { type: "corsproxy", url: `https://corsproxy.io/?${encodeURIComponent(normalizedTarget)}` }
+    { type: "direct", url: normalized },
+    { type: "allorigins", url: `https://api.allorigins.win/raw?url=${encodeURIComponent(normalized)}` },
+    { type: "codetabs", url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(normalized)}` }
   ];
 
-  const candidates = [];
-  for (const attempt of attempts) {
-    for (let retry = 0; retry < FETCH_RETRY_COUNT; retry += 1) {
-      const candidate = await fetchTextCandidate(attempt.url, attempt.type);
-      if (candidate) {
-        candidates.push(candidate);
-        break;
-      }
-    }
+  if (options.mode === "html" || options.mode === "text") {
+    attempts.push({ type: "jina", url: `https://r.jina.ai/http://${noScheme}` });
+    attempts.push({ type: "jina-protocol", url: `https://r.jina.ai/http://${protocol}://${noScheme}` });
   }
 
-  if (!candidates.length) return null;
-
-  candidates.sort((a, b) => {
-    const qualityDelta = (b.qualityScore || 0) - (a.qualityScore || 0);
-    if (qualityDelta !== 0) return qualityDelta;
-    return String(a.source || "").localeCompare(String(b.source || ""));
-  });
-
-  const best = candidates[0];
-  return {
-    ...best,
-    ok: true,
-    url: normalizedTarget,
-    attemptedSources: [...new Set(candidates.map((item) => item.source))]
-  };
+  return attempts;
 }
 
-function extractStructuredData(doc) {
-  const items = [];
-  doc.querySelectorAll('script[type="application/ld+json"]').forEach((script) => {
-    const raw = script.textContent?.trim();
-    if (!raw) return;
-    try {
-      const parsed = JSON.parse(raw);
-      const queue = Array.isArray(parsed) ? parsed : [parsed];
-      queue.forEach((item) => items.push(item));
-    } catch (error) {
-      // Ignore malformed JSON-LD blocks.
-    }
-  });
-  return items;
-}
+function normalizeFetchedPageMarkup(text, source, pageUrl, contentType = "") {
+  const raw = String(text || "");
+  if (!raw.trim()) return { html: "", rawText: "", mode: "empty" };
 
-function collectStructuredTypes(value, bucket = new Set()) {
-  if (!value) return bucket;
-  if (Array.isArray(value)) {
-    value.forEach((item) => collectStructuredTypes(item, bucket));
-    return bucket;
-  }
-  if (typeof value === "object") {
-    const type = value['@type'];
-    if (Array.isArray(type)) type.forEach((entry) => bucket.add(String(entry)));
-    else if (type) bucket.add(String(type));
-    Object.values(value).forEach((entry) => collectStructuredTypes(entry, bucket));
-  }
-  return bucket;
-}
-
-function hasStructuredDataType(context, ...types) {
-  const available = new Set((context?.structuredTypes || []).map((item) => String(item).toLowerCase()));
-  return types.some((type) => available.has(String(type).toLowerCase()));
-}
-
-function buildAnalysisContext(doc, html, url) {
-  const metaDescription = doc.querySelector('meta[name="description"]')?.getAttribute('content')?.trim() || "";
-  const structuredData = extractStructuredData(doc);
-  const structuredTypes = [...collectStructuredTypes(structuredData)].sort();
-  const linkHrefs = [...doc.querySelectorAll('a[href]')]
-    .map((link) => link.getAttribute('href'))
-    .filter(Boolean)
-    .slice(0, 400);
-  const imageAltCount = [...doc.querySelectorAll('img[alt]')].filter((img) => (img.getAttribute('alt') || '').trim().length > 1).length;
-  const imageCount = doc.querySelectorAll('img').length;
-  const canonicalUrl = doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || url || "";
-  return {
-    metaDescription,
-    structuredData,
-    structuredTypes,
-    canonicalUrl,
-    linkHrefs,
-    imageAltCount,
-    imageCount,
-    hasSearchInput: !!doc.querySelector('input[type="search"], [role="search"], form[action*="search" i]'),
-    hasEmailCapture: !!doc.querySelector('input[type="email"]'),
-    hasBreadcrumbs: !!doc.querySelector('nav[aria-label*="breadcrumb" i], [class*="breadcrumb" i]'),
-    hasProductSchema: hasStructuredDataType({ structuredTypes }, 'Product', 'Offer'),
-    hasReviewSchema: hasStructuredDataType({ structuredTypes }, 'AggregateRating', 'Review'),
-    fetchUrl: url || ""
-  };
-}
-
-async function discoverUrlsForAudit(homeUrl) {
-  const discovered = { categories: [], products: [] };
-  const fetchResult = await fetchPageHtml(homeUrl);
-  if (!fetchResult.ok) return discovered;
-
-  const merged = discoverUrlsFromHtml(fetchResult.html, homeUrl);
-  discovered.categories.push(...merged.categories);
-  discovered.products.push(...merged.products);
-
-  try {
-    const home = new URL(homeUrl);
-    const robotsUrl = `${home.origin}/robots.txt`;
-    const robotsResult = await fetchPageHtml(robotsUrl, { preferFresh: true, allowCacheFallback: true });
-    if (robotsResult.ok) {
-      const sitemapMatches = [...robotsResult.html.matchAll(/sitemap:\s*(https?:[^\s]+)/gi)].map((match) => match[1]);
-      for (const sitemapUrl of sitemapMatches.slice(0, MAX_DISCOVERY_SITEMAPS)) {
-        const sitemapResult = await fetchPageHtml(sitemapUrl, { preferFresh: true, allowCacheFallback: true });
-        if (!sitemapResult.ok) continue;
-        const urlMatches = [...sitemapResult.html.matchAll(/<loc>(.*?)<\/loc>/gi)].map((match) => match[1]).slice(0, MAX_DISCOVERY_URLS_FROM_SITEMAP);
-        const additional = discoverUrlsFromHtml(urlMatches.map((loc) => `<a href="${loc}"></a>`).join(''), homeUrl);
-        discovered.categories.push(...additional.categories);
-        discovered.products.push(...additional.products);
-      }
-    }
-  } catch (error) {
-    // Keep homepage-based discovery only.
+  const looksLikeHtml = /<html[\s>]|<body[\s>]|<head[\s>]|<title[\s>]|<!doctype html/i.test(raw) || /text\/html/i.test(contentType);
+  if (looksLikeHtml) {
+    return { html: raw, rawText: stripHtmlToText(raw), mode: "html" };
   }
 
-  discovered.categories = [...new Set(discovered.categories)].sort().slice(0, MAX_AUTO_DISCOVERED_CATEGORIES);
-  discovered.products = [...new Set(discovered.products)].sort().slice(0, MAX_AUTO_DISCOVERED_PRODUCTS);
-  return discovered;
+  if (source === "jina") {
+    const cleaned = raw
+      .replace(/^Title:\s*/im, "")
+      .replace(/^URL Source:\s*/im, "")
+      .replace(/^Markdown Content:\s*/im, "")
+      .trim();
+    const extractedLinks = [...new Set((cleaned.match(/https?:\/\/[^\s)\]>"']+/g) || []).slice(0, 40))];
+    const html = `<!doctype html><html><head><title>${escapeHtml(pageUrl)}</title></head><body><main><pre>${escapeHtml(cleaned.slice(0, MAX_LINKED_RESOURCE_CHARS))}</pre>${extractedLinks.map((link) => `<a href="${escapeAttribute(link)}">${escapeHtml(link)}</a>`).join("")}</main></body></html>`;
+    return { html, rawText: cleaned, mode: "text-proxy" };
+  }
+
+  const html = `<!doctype html><html><head><title>${escapeHtml(pageUrl)}</title></head><body><pre>${escapeHtml(raw.slice(0, MAX_LINKED_RESOURCE_CHARS))}</pre></body></html>`;
+  return { html, rawText: raw, mode: "text" };
 }
 
-async function fetchPageHtml(url, options = {}) {
-  const { preferFresh = false, allowCacheFallback = true } = options;
-  const cached = getCachedFetchResult(url);
-  if (cached && !preferFresh) {
-    return { ...cached, url: cached.url || url };
-  }
-
-  const live = await fetchBestLiveHtml(url);
-  if (live?.ok) {
-    if (cached && cached.ok && STABLE_ANALYSIS_MODE) {
-      const liveQuality = live.qualityScore || 0;
-      const cachedQuality = cached.qualityScore || 0;
-      if (cachedQuality > liveQuality + 6) {
-        return { ...cached, url: cached.url || url, usedStableSnapshot: true };
-      }
-    }
-    persistFetchResult(url, live);
-    return live;
-  }
-
-  if (allowCacheFallback && cached?.ok) {
-    return { ...cached, url: cached.url || url, usedStableSnapshot: true };
-  }
-
-  return {
-    ok: false,
-    html: "",
-    source: "blocked",
-    url,
-    attemptedSources: ["direct", "allorigins", "corsproxy"]
-  };
+function stripHtmlToText(html) {
+  return String(html || "")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
-
 
 async function fetchPageSpeedScore(url) {
   try {
@@ -1023,8 +1023,8 @@ function getScreenshotUrl(url, provider = "primary") {
   return `https://image.thum.io/get/width/1400/noanimate/${normalizedUrl}`;
 }
 
-function detectStoreStack(doc, text, html, url) {
-  const lowerHtml = String(html || "").toLowerCase();
+function detectStoreStack(doc, text, html, url, context = null) {
+  const lowerHtml = `${String(html || "").toLowerCase()} ${(context?.assetText || "").toLowerCase()} ${(context?.inlineText || "").toLowerCase()} ${(context?.resourceHints || "").toLowerCase()}`;
   const hostname = safeHostname(url);
   const signals = { platform: "Unknown", theme: "Unknown", apps: [], badges: [], signals: [] };
 
@@ -1042,7 +1042,12 @@ function detectStoreStack(doc, text, html, url) {
     ["Stamped", /stamped/i],
     ["Afterpay / Clearpay", /afterpay|clearpay/i],
     ["Klarna", /klarna/i],
-    ["Shop Pay", /shop pay/i]
+    ["Shop Pay", /shop pay/i],
+    ["Okendo", /okendo/i],
+    ["Attentive", /attentive/i],
+    ["Gorgias", /gorgias/i],
+    ["Searchanise", /searchanise/i],
+    ["Nosto", /nosto/i]
   ];
   appTests.forEach(([name, regex]) => { if (regex.test(lowerHtml)) signals.apps.push(name); });
 
@@ -1071,48 +1076,365 @@ function detectStoreStack(doc, text, html, url) {
   return signals;
 }
 
+function normalizeDiscoveredUrl(value, baseUrl) {
+  if (!value) return null;
+  const cleaned = String(value).trim();
+  if (!cleaned || cleaned.startsWith("#") || /^javascript:|^mailto:|^tel:/i.test(cleaned)) return null;
+  try {
+    const url = new URL(cleaned, baseUrl);
+    url.hash = "";
+    const pathname = url.pathname.replace(/\/{2,}/g, "/");
+    url.pathname = pathname.length > 1 ? pathname.replace(/\/$/, "") : pathname;
+    return url.toString();
+  } catch (error) {
+    return null;
+  }
+}
+
+
+function classifyDiscoveredUrl(url, labelText = "") {
+  try {
+    const parsed = new URL(url);
+    const path = `${parsed.pathname.toLowerCase()}/`;
+    const label = String(labelText || "").toLowerCase();
+    const combined = `${path} ${label}`;
+
+    const excluded = [
+      "/cart/", "/checkout/", "/account/", "/login/", "/register/", "/search/",
+      "/policies/", "/policy/", "/privacy/", "/terms/", "/refund/", "/returns/",
+      "/contact/", "/pages/", "/blogs/", "/blog/", "/articles/", "/collections/vendors",
+      "/collections/types", "/apps/", "/tools/", "/cdn/", "/service/", "/help/"
+    ];
+    if (excluded.some((fragment) => path.includes(fragment))) return null;
+
+    if (/(^|\/)(products?|product-detail|item|items|p|pdp)(\/|$)/i.test(path)) return "product";
+    if (/(^|\/)(collections?|category|categories|catalog|catalogue|shop|store|c)(\/|$)/i.test(path)) return "category";
+    if (/\b(add to cart|buy now|choose options?|quick add|shop now|view product|select options?)\b/i.test(combined)) return "product";
+    if (/\b(shop all|view all|collection|category|catalog|browse|explore range|all products?)\b/i.test(combined)) return "category";
+
+    if (parsed.search && /variant=|sku=|product/i.test(parsed.search)) return "product";
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function createEmptyDiscoveryResult(baseUrl = "") {
+  return {
+    baseUrl,
+    categories: [],
+    products: [],
+    debug: {
+      sameDomainLinks: 0,
+      homepageLinksParsed: 0,
+      sitemapUrlsParsed: 0,
+      sitemapsTried: 0,
+      candidatePagesInspected: 0
+    },
+    notes: [],
+    source: "none",
+    status: "No URLs discovered yet."
+  };
+}
+
+function mergeDiscoveryResults(target, incoming) {
+  const categorySet = new Set(target.categories || []);
+  const productSet = new Set(target.products || []);
+  (incoming.categories || []).forEach((url) => {
+    if (categorySet.size < MAX_AUTO_DISCOVERED_CATEGORIES) categorySet.add(url);
+  });
+  (incoming.products || []).forEach((url) => {
+    if (productSet.size < MAX_AUTO_DISCOVERED_PRODUCTS) productSet.add(url);
+  });
+  target.categories = [...categorySet].slice(0, MAX_AUTO_DISCOVERED_CATEGORIES);
+  target.products = [...productSet].slice(0, MAX_AUTO_DISCOVERED_PRODUCTS);
+  return target;
+}
+
+
 function discoverUrlsFromHtml(html, baseUrl) {
+  const discovered = createEmptyDiscoveryResult(baseUrl);
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, "text/html");
     const base = new URL(baseUrl);
-    const links = [...doc.querySelectorAll('a[href]')]
-      .map((a) => a.getAttribute('href'))
-      .filter(Boolean)
-      .map((href) => {
-        try { return new URL(href, base).toString(); } catch (error) { return null; }
-      })
-      .filter(Boolean)
-      .filter((href) => safeHostname(href) === safeHostname(baseUrl));
+    const linkMap = new Map();
 
-    const scoreUrl = (href) => {
-      try {
-        const parsed = new URL(href);
-        const path = parsed.pathname.toLowerCase();
-        let score = 0;
-        if (/\/(collections|category|catalog|shop)(\/|$)/i.test(path)) score += 10;
-        if (/\/(products|product)(\/|$)/i.test(path)) score += 10;
-        if (/sale|new|best|featured/i.test(path)) score += 1;
-        if (parsed.search) score -= 1;
-        if (/\/collections\/all(\/|$)/i.test(path)) score += 2;
-        return score;
-      } catch (error) {
-        return 0;
+    const rememberUrl = (candidate, label = "") => {
+      const normalized = normalizeDiscoveredUrl(candidate, base);
+      if (!normalized || safeHostname(normalized) !== safeHostname(baseUrl)) return;
+      const existing = linkMap.get(normalized);
+      const mergedLabel = [existing?.label || "", label].filter(Boolean).join(" ").trim();
+      if (!existing || mergedLabel.length > (existing?.label || "").length) {
+        linkMap.set(normalized, { label: mergedLabel });
       }
     };
 
-    const uniqueLinks = [...new Set(links)].sort((a, b) => {
-      const scoreDelta = scoreUrl(b) - scoreUrl(a);
-      if (scoreDelta !== 0) return scoreDelta;
-      return a.localeCompare(b);
+    [...doc.querySelectorAll('a[href]')].forEach((anchor) => {
+      const label = `${anchor.textContent || ""} ${anchor.getAttribute("aria-label") || ""} ${anchor.getAttribute("title") || ""}`.trim();
+      rememberUrl(anchor.getAttribute("href"), label);
     });
 
-    const categories = uniqueLinks.filter((href) => /\/(collections|category|collections\/all|catalog|shop)(\/|$)/i.test(new URL(href).pathname)).slice(0, MAX_AUTO_DISCOVERED_CATEGORIES);
-    const products = uniqueLinks.filter((href) => /\/(products|product)(\/|$)/i.test(new URL(href).pathname)).slice(0, MAX_AUTO_DISCOVERED_PRODUCTS);
-    return { categories, products };
+    [...doc.querySelectorAll('link[rel="canonical"], link[rel="alternate"], meta[property="og:url"], meta[name="twitter:url"]')].forEach((node) => {
+      rememberUrl(node.getAttribute("href") || node.getAttribute("content") || "", "");
+    });
+
+    const textSources = [
+      html,
+      ...[...doc.querySelectorAll('script[type="application/json"], script[type="application/ld+json"], script:not([src])')]
+        .slice(0, 12)
+        .map((node) => (node.textContent || "").slice(0, MAX_INLINE_TEXT_CHARS))
+    ].join(" ");
+
+    const urlMatches = textSources.match(/https?:\/\/[^\s"'<>]+/g) || [];
+    urlMatches.slice(0, MAX_DISCOVERY_TEXT_URLS).forEach((value) => rememberUrl(value, "embedded-url"));
+
+    const categories = [];
+    const products = [];
+
+    [...linkMap.entries()].forEach(([url, meta]) => {
+      const type = classifyDiscoveredUrl(url, meta.label);
+      if (type === "category" && categories.length < MAX_AUTO_DISCOVERED_CATEGORIES) categories.push(url);
+      if (type === "product" && products.length < MAX_AUTO_DISCOVERED_PRODUCTS) products.push(url);
+    });
+
+    discovered.debug.homepageLinksParsed = linkMap.size;
+    discovered.debug.sameDomainLinks = linkMap.size;
+    discovered.categories = [...new Set(categories)];
+    discovered.products = [...new Set(products)];
+    if (!discovered.categories.length && !discovered.products.length) {
+      discovered.notes.push("The current site structure did not expose obvious product or category URLs in the fetched markup.");
+    }
+    return discovered;
   } catch (error) {
-    return { categories: [], products: [] };
+    discovered.notes.push("The home page HTML could not be parsed for links.");
+    return discovered;
   }
+}
+
+function extractSitemapsFromRobots(text, baseUrl) {
+  const found = [];
+  String(text || "").split(/\r?\n/).forEach((line) => {
+    const match = line.match(/^\s*Sitemap:\s*(.+)\s*$/i);
+    if (!match) return;
+    const normalized = normalizeDiscoveredUrl(match[1], baseUrl);
+    if (normalized) found.push(normalized);
+  });
+  return [...new Set(found)];
+}
+
+function extractUrlsFromXml(text, baseUrl) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(String(text || ""), "application/xml");
+  if (doc.querySelector("parsererror")) return { urls: [], sitemaps: [] };
+  const urls = [...doc.querySelectorAll("url > loc")].map((node) => normalizeDiscoveredUrl(node.textContent, baseUrl)).filter(Boolean);
+  const sitemaps = [...doc.querySelectorAll("sitemap > loc")].map((node) => normalizeDiscoveredUrl(node.textContent, baseUrl)).filter(Boolean);
+  return { urls, sitemaps };
+}
+
+
+async function fetchTextResource(url) {
+  const normalizedUrl = String(url || "").trim();
+  if (!normalizedUrl) return { ok: false, source: "blocked", text: "", url: "" };
+
+  if (TEXT_FETCH_CACHE.has(normalizedUrl)) {
+    return TEXT_FETCH_CACHE.get(normalizedUrl);
+  }
+
+  const request = (async () => {
+    const attempts = buildFetchAttempts(normalizedUrl, { mode: "text" });
+
+    for (const attempt of attempts) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+      try {
+        const response = await fetch(attempt.url, { method: "GET", signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!response.ok) continue;
+        const text = await response.text();
+        if (text && text.length > 20) return { ok: true, source: attempt.type, text, url: normalizedUrl };
+      } catch (error) {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    return { ok: false, source: "blocked", text: "", url: normalizedUrl };
+  })();
+
+  TEXT_FETCH_CACHE.set(normalizedUrl, request);
+  return request;
+}
+
+async function inspectCandidateUrl(url) {
+  const result = await fetchPageHtml(url);
+  if (!result.ok) return null;
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(result.html, "text/html");
+    const context = await buildAnalysisContext(doc, result.html, url);
+    const bodyText = String(context.signalText || "").toLowerCase();
+    const hasProductSchema = hasStructuredDataType(context, "Product", "Offer");
+    const hasCategorySignals = hasAny(bodyText, ["filter", "sort", "shop all", "view all", "collections", "category", "browse", "results"]) || !!doc.querySelector('select, [class*="filter" i], [data-filter], [data-sort], [class*="collection" i]');
+    const hasProductSignals = hasProductSchema
+      || hasAny(bodyText, ["add to cart", "buy now", "product details", "quantity", "variant", "size guide", "add to bag", "in stock"])
+      || !!doc.querySelector('button[name="add"], [data-add-to-cart], form[action*="/cart"], [data-product], [itemtype*="Product"], [itemprop="price"]');
+
+    const productScore = (hasProductSignals ? 3 : 0) + (context.commerceSignals?.priceSignals ? 2 : 0) + (context.commerceSignals?.variantSignals ? 2 : 0) + (context.domStats?.productForms ? 2 : 0);
+    const categoryScore = (hasCategorySignals ? 3 : 0) + (context.domStats?.images >= 6 ? 1 : 0) + (context.domStats?.priceNodes >= 3 ? 2 : 0);
+
+    if (productScore >= categoryScore + 2) return "product";
+    if (categoryScore >= productScore + 2) return "category";
+    if (hasProductSignals) return "product";
+    if (hasCategorySignals) return "category";
+    return classifyDiscoveredUrl(url, bodyText);
+  } catch (error) {
+    return null;
+  }
+}
+
+async function discoverUrlsAdvanced(homeUrl, setStatus = () => {}) {
+  const discovered = createEmptyDiscoveryResult(homeUrl);
+  const notes = discovered.notes;
+  const totalSteps = 5;
+  const setStep = (step, message, extra = {}) => {
+    discovered.status = message;
+    setStatus({
+      step,
+      totalSteps,
+      message,
+      notes: extra.notes,
+      preview: extra.preview
+    });
+  };
+
+  setStep(1, "Fetching the home page to discover internal URLs...");
+  const homeFetch = await fetchPageHtml(homeUrl);
+  if (!homeFetch.ok) {
+    notes.push("The home page could not be fetched automatically. This usually happens because the site blocks browser fetch requests or uses heavy client-side rendering.");
+    discovered.source = "blocked";
+    discovered.status = "Automatic discovery could not access the home page.";
+    setStep(5, discovered.status, {
+      notes: discovered.notes,
+      preview: {
+        categories: discovered.categories,
+        products: discovered.products
+      }
+    });
+    return discovered;
+  }
+
+  discovered.source = homeFetch.source;
+  mergeDiscoveryResults(discovered, discoverUrlsFromHtml(homeFetch.html, homeUrl));
+  const parser = new DOMParser();
+  const homeDoc = parser.parseFromString(homeFetch.html, "text/html");
+  const homeStructuredData = extractStructuredData(homeDoc);
+  const platformApiSignals = await inspectPlatformApiSignals(homeUrl, homeFetch.html, homeStructuredData);
+  mergeDiscoveryResults(discovered, {
+    categories: platformApiSignals.urlHints.filter((url) => classifyDiscoveredUrl(url) === "category"),
+    products: platformApiSignals.urlHints.filter((url) => classifyDiscoveredUrl(url) === "product")
+  });
+  if (platformApiSignals.badges.length) notes.push(`Storefront APIs contributed additional discovery signals (${platformApiSignals.badges.join(", ")}).`);
+  if (discovered.categories.length || discovered.products.length) {
+    notes.push(`Home page scan found ${discovered.debug.homepageLinksParsed} same-domain links.`);
+  } else {
+    notes.push(`Home page scan found ${discovered.debug.homepageLinksParsed} same-domain links, but none matched the current product/category rules.`);
+  }
+
+  setStep(2, "Checking robots.txt and sitemap files for more URLs...");
+  let sitemapQueue = [normalizeDiscoveredUrl("/sitemap.xml", homeUrl), normalizeDiscoveredUrl("/sitemap_index.xml", homeUrl)].filter(Boolean);
+  const robotsUrl = normalizeDiscoveredUrl("/robots.txt", homeUrl);
+  if (robotsUrl) {
+    const robotsResult = await fetchTextResource(robotsUrl);
+    if (robotsResult.ok) sitemapQueue = [...new Set([...extractSitemapsFromRobots(robotsResult.text, homeUrl), ...sitemapQueue])];
+  }
+
+  const discoveredFromSitemaps = createEmptyDiscoveryResult(homeUrl);
+  const nestedSitemaps = [];
+  for (const sitemapUrl of sitemapQueue.slice(0, MAX_DISCOVERY_SITEMAPS)) {
+    const sitemapResult = await fetchTextResource(sitemapUrl);
+    discovered.debug.sitemapsTried += 1;
+    if (!sitemapResult.ok) continue;
+    const xml = extractUrlsFromXml(sitemapResult.text, homeUrl);
+    discovered.debug.sitemapUrlsParsed += xml.urls.length;
+    nestedSitemaps.push(...xml.sitemaps);
+    xml.urls.slice(0, MAX_DISCOVERY_URLS_FROM_SITEMAP).forEach((url) => {
+      const type = classifyDiscoveredUrl(url);
+      if (type === "category") discoveredFromSitemaps.categories.push(url);
+      if (type === "product") discoveredFromSitemaps.products.push(url);
+    });
+  }
+
+  for (const sitemapUrl of [...new Set(nestedSitemaps)].slice(0, Math.max(0, MAX_DISCOVERY_SITEMAPS - discovered.debug.sitemapsTried))) {
+    const sitemapResult = await fetchTextResource(sitemapUrl);
+    discovered.debug.sitemapsTried += 1;
+    if (!sitemapResult.ok) continue;
+    const xml = extractUrlsFromXml(sitemapResult.text, homeUrl);
+    discovered.debug.sitemapUrlsParsed += xml.urls.length;
+    xml.urls.slice(0, MAX_DISCOVERY_URLS_FROM_SITEMAP).forEach((url) => {
+      const type = classifyDiscoveredUrl(url);
+      if (type === "category") discoveredFromSitemaps.categories.push(url);
+      if (type === "product") discoveredFromSitemaps.products.push(url);
+    });
+  }
+
+  mergeDiscoveryResults(discovered, {
+    categories: [...new Set(discoveredFromSitemaps.categories)],
+    products: [...new Set(discoveredFromSitemaps.products)]
+  });
+
+  setStep(3, "Classifying discovered URLs and validating likely page types...", {
+    preview: {
+      categories: discovered.categories,
+      products: discovered.products
+    }
+  });
+
+  if (discovered.debug.sitemapUrlsParsed) notes.push(`Sitemaps contributed ${discovered.debug.sitemapUrlsParsed} URLs for classification.`);
+  else notes.push("No usable sitemap URLs were available.");
+
+  if ((!discovered.categories.length || !discovered.products.length) && discovered.debug.homepageLinksParsed) {
+    setStep(4, "Inspecting likely internal pages to confirm product and category patterns...");
+    const candidateUrls = [...new Set(
+      [...homeDoc.querySelectorAll('a[href]')]
+        .map((a) => normalizeDiscoveredUrl(a.getAttribute("href"), homeUrl))
+        .filter(Boolean)
+        .filter((url) => safeHostname(url) === safeHostname(homeUrl))
+    )].slice(0, MAX_DISCOVERY_CANDIDATE_PAGES);
+
+    const inspectionResults = await mapWithConcurrency(
+      candidateUrls.filter((url) => !discovered.categories.includes(url) && !discovered.products.includes(url)),
+      3,
+      async (url) => ({ url, type: await inspectCandidateUrl(url) })
+    );
+    inspectionResults.forEach((entry) => {
+      if (!entry?.type) return;
+      discovered.debug.candidatePagesInspected += 1;
+      if (entry.type === "category" && discovered.categories.length < MAX_AUTO_DISCOVERED_CATEGORIES) discovered.categories.push(entry.url);
+      if (entry.type === "product" && discovered.products.length < MAX_AUTO_DISCOVERED_PRODUCTS) discovered.products.push(entry.url);
+    });
+
+    if (discovered.debug.candidatePagesInspected) notes.push(`Confirmed ${discovered.debug.candidatePagesInspected} candidate internal pages by inspecting their content.`);
+  }
+
+  discovered.categories = [...new Set(discovered.categories)].slice(0, MAX_AUTO_DISCOVERED_CATEGORIES);
+  discovered.products = [...new Set(discovered.products)].slice(0, MAX_AUTO_DISCOVERED_PRODUCTS);
+
+  if (discovered.categories.length || discovered.products.length) {
+    discovered.status = `Discovery complete: ${discovered.categories.length} category URL${discovered.categories.length === 1 ? "" : "s"} and ${discovered.products.length} product URL${discovered.products.length === 1 ? "" : "s"} found.`;
+  } else {
+    discovered.status = "Discovery completed, but no category or product URLs could be confirmed automatically.";
+    notes.push("Some stores hide important links behind JavaScript menus or use custom URL structures, so manual URLs may still be needed.");
+  }
+
+  setStep(5, discovered.status, {
+    notes: discovered.notes,
+    preview: {
+      categories: discovered.categories,
+      products: discovered.products
+    }
+  });
+
+  return discovered;
 }
 
 function autoFillDiscoveredUrls(discovered, plan) {
@@ -1135,8 +1457,9 @@ function autoFillDiscoveredUrls(discovered, plan) {
 
 async function analyzeCompetitor(url, plan) {
   const fetchResult = await fetchPageHtml(url);
-  const home = analyzePage("home", fetchResult, plan);
-  const general = analyzePage("general", fetchResult, plan);
+  fetchResult.url = url;
+  const home = await analyzePage("home", fetchResult, plan);
+  const general = await analyzePage("general", fetchResult, plan);
   const totalWeight = home.totalWeight + general.totalWeight;
   const scoreWeight = home.scoreWeight + general.scoreWeight;
   const speed = await fetchPageSpeedScore(url);
@@ -1145,7 +1468,8 @@ async function analyzeCompetitor(url, plan) {
     fetched: fetchResult.ok,
     score: totalWeight ? Math.round((scoreWeight / totalWeight) * 100) : 0,
     speed: speed?.score ?? null,
-    stack: fetchResult.ok ? detectStoreStack(new DOMParser().parseFromString(fetchResult.html, "text/html"), fetchResult.html.toLowerCase(), fetchResult.html, url) : null
+    stack: home.stack || general.stack || null,
+    reliability: home.reliability || general.reliability || null
   };
 }
 
@@ -1174,24 +1498,52 @@ async function discoverUrlsOnly() {
     alert("Add a home page URL first.");
     return;
   }
-  const discovered = await discoverUrlsForAudit(homeUrl);
-  if (!discovered.categories.length && !discovered.products.length) {
-    alert("The app could not discover enough category or product URLs automatically for this site.");
-    return;
+
+  const discoverButton = document.getElementById("discoverButton");
+  if (discoverButton) {
+    discoverButton.disabled = true;
+    discoverButton.dataset.originalLabel = discoverButton.dataset.originalLabel || discoverButton.textContent;
+    discoverButton.textContent = "Discovering...";
   }
-  STATE.discovered = discovered;
-  renderDiscoveredUrls(discovered);
-  autoFillDiscoveredUrls(discovered, STATE.plan);
+
+  renderDiscoveredUrls({
+    categories: [],
+    products: [],
+    status: "Starting URL discovery...",
+    notes: ["The app is scanning the home page, robots.txt, sitemap files, and likely internal links."]
+  });
+
+  try {
+    const discovered = await discoverUrlsAdvanced(homeUrl, (payload) => {
+      const info = typeof payload === "string" ? { message: payload } : (payload || {});
+      renderDiscoveredUrls({
+        categories: info.preview?.categories || [],
+        products: info.preview?.products || [],
+        status: info.message || "Discovering URLs...",
+        notes: info.notes || ["The app is still working. This can take a little longer on larger stores."]
+      });
+    });
+    STATE.discovered = discovered;
+    renderDiscoveredUrls(discovered);
+    autoFillDiscoveredUrls(discovered, STATE.plan);
+  } finally {
+    if (discoverButton) {
+      discoverButton.disabled = false;
+      discoverButton.textContent = discoverButton.dataset.originalLabel || "Discover URLs";
+    }
+  }
 }
 
-function analyzePage(pageType, fetchResult, plan) {
+async function analyzePage(pageType, fetchResult, plan) {
   const parser = new DOMParser();
   const fallbackHtml = "<html><body></body></html>";
   const doc = parser.parseFromString(fetchResult.ok ? fetchResult.html : fallbackHtml, "text/html");
-  const text = (doc.body?.innerText || "").replace(/\s+/g, " ").toLowerCase();
-  const html = fetchResult.ok ? fetchResult.html : "";
-  const context = buildAnalysisContext(doc, html, fetchResult.url || "");
-  const stack = fetchResult.ok ? detectStoreStack(doc, text, html, fetchResult.url || "") : null;
+  const context = fetchResult.ok
+    ? await buildAnalysisContext(doc, fetchResult.html, fetchResult.url || "")
+    : buildFallbackAnalysisContext(doc, fetchResult.url || "");
+
+  const stack = fetchResult.ok ? detectStoreStack(doc, context.signalText, fetchResult.html, fetchResult.url || "", context) : null;
+  context.stack = stack;
   const rules = (AUTOMATED_CHECKS[pageType] || []).filter((item) => plan === "pro" || item.tier === "basic");
 
   const appliedChecks = [];
@@ -1204,7 +1556,15 @@ function analyzePage(pageType, fetchResult, plan) {
     let passed = false;
     if (fetchResult.ok) {
       try {
-        passed = !!ruleDef.test({ doc, text, html, stack, context, url: fetchResult.url || "" });
+        passed = !!ruleDef.test({
+          doc,
+          text: context.signalText,
+          html: fetchResult.html,
+          stack,
+          context,
+          structuredData: context.structuredData,
+          resources: context.resources
+        });
       } catch (error) {
         passed = false;
       }
@@ -1213,12 +1573,14 @@ function analyzePage(pageType, fetchResult, plan) {
     totalWeight += ruleDef.weight;
     if (passed) scoreWeight += ruleDef.weight;
 
+    const evidence = describeRuleEvidence(ruleDef, context, pageType, passed, fetchResult.ok);
     appliedChecks.push({
       id: ruleDef.id,
       label: ruleDef.label,
       passed,
       weight: ruleDef.weight,
-      tier: ruleDef.tier
+      tier: ruleDef.tier,
+      evidence
     });
 
     if (!passed) {
@@ -1227,22 +1589,22 @@ function analyzePage(pageType, fetchResult, plan) {
       recommendations.push({
         title: ruleDef.label,
         detail: fetchResult.ok
-          ? `This check did not pass automatically on the ${PAGE_LABELS[pageType]} URL.`
+          ? explainRuleFailure(ruleDef, pageType, context)
           : `The page could not be fetched automatically, so this important check should be reviewed manually.`,
         priority,
         impactLabel: ruleDef.weight >= 3 ? "High" : ruleDef.weight === 2 ? "Medium" : "Low",
         pageLabel: PAGE_LABELS[pageType],
-        type: fetchResult.ok ? "automatic" : "manual"
+        type: fetchResult.ok ? "automatic" : "manual",
+        sourceLabel: fetchResult.ok ? "Automatic inspection" : "Manual review",
+        confidence: fetchResult.ok ? context.reliability.label : "Low",
+        evidence: fetchResult.ok ? evidence : "Automatic page access was blocked.",
+        evidenceBadges: context.evidenceBadges || []
       });
     }
   });
 
-  const fetchStatus = fetchResult.ok
-    ? `Fetched via ${fetchResult.usedStableSnapshot ? 'stable cached snapshot' : fetchResult.source}`
-    : "Fetch blocked or unavailable";
-
   return {
-    fetchStatus,
+    fetchStatus: fetchResult.ok ? `Fetched via ${fetchResult.source}` : "Fetch blocked or unavailable",
     appliedChecks,
     scoreWeight,
     totalWeight,
@@ -1250,7 +1612,11 @@ function analyzePage(pageType, fetchResult, plan) {
     recommendations,
     stack,
     screenshotUrl: fetchResult.url ? getScreenshotUrl(fetchResult.url) : "",
-    structuredTypes: context.structuredTypes
+    reliability: context.reliability,
+    evidenceBadges: context.evidenceBadges || [],
+    structuredDataSummary: summarizeStructuredData(context.structuredData),
+    extractedSignals: context.extractedSignals,
+    resourceSummary: context.resourceSummary
   };
 }
 
@@ -1348,12 +1714,43 @@ function renderReport(report) {
   const gauge = document.getElementById("scoreGaugeFill");
   if (gauge) gauge.style.width = `${Math.max(0, Math.min(100, report.overallScore))}%`;
 
+  renderInspectionQuality(report);
   renderRecommendations(report.recommendations);
   renderPageBreakdown(report.pageResults);
   renderStackInsights(report.stackSummary);
   renderCompetitorComparison(report.competitorReport);
   renderScreenshots(report.pageResults);
   renderDiscoveredUrls(report.discovered || STATE.discovered);
+}
+
+function renderInspectionQuality(report) {
+  const container = document.getElementById("inspectionQuality");
+  if (!container) return;
+  const summary = report?.inspectionSummary || buildInspectionSummary(report?.pageResults || []);
+  const reliabilityClass = (summary.reliabilityLabel || "Low").toLowerCase().replace(/\s+/g, "-");
+  container.className = "inspection-quality-grid";
+  container.innerHTML = `
+    <article class="inspection-card">
+      <span class="metric-label">Inspection confidence</span>
+      <strong class="inspection-score ${escapeAttribute(reliabilityClass)}">${escapeHtml(summary.reliabilityLabel || "Low")}</strong>
+      <span class="metric-sub">Based on fetched pages, structured data, and linked assets</span>
+    </article>
+    <article class="inspection-card">
+      <span class="metric-label">Pages fetched</span>
+      <strong>${summary.fetchedPages}/${summary.pageCount}</strong>
+      <span class="metric-sub">Automatic page access succeeded on these URLs</span>
+    </article>
+    <article class="inspection-card">
+      <span class="metric-label">Structured data found</span>
+      <strong>${summary.structuredDataCount}</strong>
+      <span class="metric-sub">JSON-LD items used to enrich the audit</span>
+    </article>
+    <article class="inspection-card">
+      <span class="metric-label">Extra sources inspected</span>
+      <strong>${summary.assetCount}</strong>
+      <span class="metric-sub">Linked assets plus inline data used to strengthen the audit</span>
+    </article>
+  `;
 }
 
 function renderRecommendations(recommendations) {
@@ -1372,6 +1769,8 @@ function renderRecommendations(recommendations) {
     const pageName = item.pageLabel || PAGE_LABELS[item.page] || "Relevant page";
     const linkLabel = `${index + 1}. ${item.title}`;
     const linkHint = destinationUrl ? `Open ${pageName} · ${shortDisplayUrl(destinationUrl)}` : `Open ${pageName} · No matching page URL configured`;
+    const confidence = item.confidence || (item.type === "automatic" ? "Medium" : "Low");
+    const sourceLabel = item.sourceLabel || (item.type === "automatic" ? "Automatic inspection" : "Manual review");
 
     return `
     <article class="rec-card rec-card-detailed">
@@ -1394,16 +1793,18 @@ function renderRecommendations(recommendations) {
           <strong>SOLUTION</strong>
           <p>${escapeHtml(solutionText)}</p>
         </div>
+        ${item.evidence ? `<div class="rec-block rec-evidence"><strong>EVIDENCE</strong><p>${escapeHtml(item.evidence)}</p></div>` : ""}
       </div>
 
       <div class="tag-row">
         <span class="tag info">${escapeHtml(pageName)}</span>
+        <span class="tag">${escapeHtml(sourceLabel)}</span>
+        <span class="tag confidence-tag">${escapeHtml(confidence)} confidence</span>
       </div>
     </article>
   `;
   }).join("");
 }
-
 
 function hydrateReportLinks(report) {
   if (!report || !Array.isArray(report.recommendations)) return report;
@@ -1562,18 +1963,30 @@ function renderDiscoveredUrls(discovered) {
   const panel = document.getElementById("discoveryPanel");
   const list = document.getElementById("discoveryList");
   if (!panel || !list) return;
+
   const categories = discovered?.categories || [];
   const products = discovered?.products || [];
-  if (!categories.length && !products.length) {
+  const notes = discovered?.notes || [];
+  const status = discovered?.status || "";
+
+  if (!categories.length && !products.length && !status && !notes.length) {
     panel.classList.add("hidden");
     list.innerHTML = "";
     return;
   }
+
   panel.classList.remove("hidden");
-  list.innerHTML = [
+  const summaryBits = [];
+  if (status) summaryBits.push(`<div class="discovery-status">${escapeHtml(status)}</div>`);
+  if (categories.length || products.length) summaryBits.push(`<div class="discovery-summary">${categories.length} category URL${categories.length === 1 ? "" : "s"} • ${products.length} product URL${products.length === 1 ? "" : "s"}</div>`);
+  if (notes.length) summaryBits.push(`<div class="discovery-notes">${notes.map((note) => `<p>${escapeHtml(note)}</p>`).join("")}</div>`);
+
+  const chips = [
     ...categories.map((url) => `<div class="discovery-chip">Category: ${escapeHtml(shortDisplayUrl(url))}</div>`),
     ...products.map((url) => `<div class="discovery-chip">Product: ${escapeHtml(shortDisplayUrl(url))}</div>`)
   ].join("");
+
+  list.innerHTML = `${summaryBits.join("")}${chips ? `<div class="discovery-chip-grid">${chips}</div>` : ""}`;
 }
 
 function renderTrendChart() {
@@ -1621,12 +2034,16 @@ function renderPageBreakdown(pageResults) {
   container.innerHTML = pageResults.map((page) => {
     const passed = page.appliedChecks.filter((item) => item.passed).length;
     const failed = page.appliedChecks.length - passed;
+    const evidenceBadges = (page.evidenceBadges || []).map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join("");
+    const structuredData = (page.structuredDataSummary || []).map((item) => `<span class="tag info">${escapeHtml(item)}</span>`).join("");
+    const reliabilityLabel = page.reliability?.label || "Low";
+    const reliabilityScore = page.reliability?.score ?? 0;
     return `
       <article class="page-card">
         <div class="page-top">
           <div>
             <div class="page-title">${escapeHtml(page.label)}</div>
-            <a class="inline-link" href="${escapeHtml(page.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(page.url)}</a>
+            <a class="inline-link" href="${escapeAttribute(page.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(page.url)}</a>
           </div>
           <span class="tag ${page.fetchStatus.startsWith("Fetched") ? "success" : "warn"}">${escapeHtml(page.fetchStatus)}</span>
         </div>
@@ -1643,16 +2060,519 @@ function renderPageBreakdown(pageResults) {
             <strong>${page.appliedChecks.length}</strong>
             <span>Auto checks</span>
           </div>
+          <div class="stat-chip">
+            <strong>${reliabilityScore}</strong>
+            <span>${escapeHtml(reliabilityLabel)} confidence</span>
+          </div>
         </div>
         <p class="status-note">
           ${page.fetchStatus.startsWith("Fetched")
-            ? "This page was fetched successfully and evaluated using the automatic rules available in this static app."
+            ? "This page was fetched successfully and evaluated using page text, metadata, structured data, inline commerce state, reachable linked assets, and any storefront APIs that could be reached from this static app."
             : "This page could not be fetched automatically. Use the recommendations list as a structured manual review guide."}
         </p>
+        ${(page.extractedSignals?.length || page.resourceSummary?.assetCount || page.structuredDataSummary?.length) ? `
+          <div class="page-evidence">
+            ${evidenceBadges}
+            ${structuredData}
+            ${page.resourceSummary?.assetCount ? `<span class="tag">${page.resourceSummary.assetCount} linked assets</span>` : ""}
+          </div>` : ""}
         ${page.stack ? `<div class="tag-row"><span class="tag info">${escapeHtml(page.stack.platform || 'Unknown platform')}</span>${(page.stack.apps || []).slice(0, 3).map((app) => `<span class="tag">${escapeHtml(app)}</span>`).join('')}</div>` : ''}
       </article>
     `;
   }).join("");
+}
+
+function buildInspectionSummary(pageResults) {
+  const pageCount = pageResults.length;
+  const fetchedPages = pageResults.filter((page) => page.fetchStatus?.startsWith("Fetched")).length;
+  const structuredDataCount = pageResults.reduce((sum, page) => sum + ((page.structuredDataSummary || []).length), 0);
+  const assetCount = pageResults.reduce((sum, page) => sum + ((page.resourceSummary?.assetCount || 0) + (page.resourceSummary?.inlineCount || 0)), 0);
+  const avgReliability = pageCount
+    ? Math.round(pageResults.reduce((sum, page) => sum + (page.reliability?.score || 0), 0) / pageCount)
+    : 0;
+  return {
+    pageCount,
+    fetchedPages,
+    structuredDataCount,
+    assetCount,
+    reliabilityScore: avgReliability,
+    reliabilityLabel: avgReliability >= 80 ? "High" : avgReliability >= 50 ? "Medium" : "Low"
+  };
+}
+
+function summarizeStructuredData(items) {
+  const types = [];
+  (items || []).forEach((entry) => {
+    const entryTypes = Array.isArray(entry?.types) ? entry.types : [];
+    entryTypes.forEach((item) => {
+      if (item && !types.includes(item)) types.push(item);
+    });
+  });
+  return types.slice(0, 4);
+}
+
+function explainRuleFailure(ruleDef, pageType, context) {
+  const hints = {
+    title: "No strong title signal was found in the parsed page title or heading structure.",
+    description: "The page is missing a clear descriptive metadata signal.",
+    search: "No strong search element or search wording was found in the parsed page content.",
+    review: "No strong review or rating signal was found in page text, structured data, or reachable assets.",
+    shipping: "Shipping or returns reassurance was not clearly found in the parsed page content.",
+    faq: "No FAQ-style content was found in the parsed text or structured data.",
+    price: "A price pattern was not confidently detected in text or structured data.",
+    cart: "The expected cart or checkout signal was not confidently detected in the parsed page content."
+  };
+  const id = ruleDef.id || "";
+  if (/meta-description/.test(id)) return hints.description;
+  if (/search/.test(id)) return hints.search;
+  if (/review|social-proof|rating/.test(id)) return hints.review;
+  if (/shipping|refund|returns|policy/.test(id)) return hints.shipping;
+  if (/faq/.test(id)) return hints.faq;
+  if (/price/.test(id)) return hints.price;
+  if (/title|h1/.test(id)) return hints.title;
+  if (/checkout|cart/.test(id)) return hints.cart;
+  const pageLabel = PAGE_LABELS[pageType] || "page";
+  return `This signal was not found strongly enough in the ${pageLabel.toLowerCase()} content that could be inspected automatically.`;
+}
+
+function describeRuleEvidence(ruleDef, context, pageType, passed, fetchOk) {
+  if (!fetchOk) return "Automatic page access was blocked.";
+  const sources = [];
+  if (context.title) sources.push(`title: ${truncateText(context.title, 70)}`);
+  if (context.metaDescription) sources.push(`meta: ${truncateText(context.metaDescription, 90)}`);
+  if ((context.structuredData || []).length) sources.push(`${context.structuredData.length} JSON-LD item${context.structuredData.length === 1 ? "" : "s"}`);
+  if (context.commerceSignals?.stateSnippets?.length) sources.push(`${context.commerceSignals.stateSnippets.length} commerce-state snippet${context.commerceSignals.stateSnippets.length === 1 ? "" : "s"}`);
+  if (context.resourceSummary?.assetCount) sources.push(`${context.resourceSummary.assetCount} linked source${context.resourceSummary.assetCount === 1 ? "" : "s"} inspected`);
+  if (context.platformApiSignals?.badges?.length) sources.push(context.platformApiSignals.badges.join(", "));
+  if (passed) return sources.slice(0, 3).join(" · ") || "Signal confirmed from parsed page content.";
+  return sources.slice(0, 3).join(" · ") || `Checked parsed ${PAGE_LABELS[pageType].toLowerCase()} HTML only.`;
+}
+
+
+function buildFallbackAnalysisContext(doc, pageUrl) {
+  return {
+    url: pageUrl,
+    title: doc.querySelector("title")?.textContent?.trim() || "",
+    metaDescription: "",
+    signalText: (doc.body?.innerText || "").replace(/\s+/g, " ").toLowerCase(),
+    structuredData: [],
+    resources: { css: [], scripts: [], inlineScripts: [], inlineStyles: [] },
+    resourceSummary: { assetCount: 0, inlineCount: 0, totalSources: 1 },
+    evidenceBadges: ["HTML"],
+    extractedSignals: [],
+    domStats: {},
+    commerceSignals: { stateSnippets: [], currencies: [], productHandles: [], reviewMentions: 0, trustMentions: 0, shippingMentions: 0 },
+    platformApiSignals: { badges: [], urlHints: [], score: 0, assetCount: 0 },
+    reliability: { score: 18, label: "Low" },
+    assetText: "",
+    inlineText: "",
+    resourceHints: "",
+    fetchMode: "blocked"
+  };
+}
+
+async function buildAnalysisContext(doc, html, pageUrl) {
+  const title = (doc.querySelector("title")?.textContent || "").trim();
+  const metaDescription = (doc.querySelector('meta[name="description"]')?.getAttribute("content") || "").trim();
+  const ogTitle = (doc.querySelector('meta[property="og:title"]')?.getAttribute("content") || "").trim();
+  const ogDescription = (doc.querySelector('meta[property="og:description"], meta[name="twitter:description"]')?.getAttribute("content") || "").trim();
+  const canonicalUrl = (doc.querySelector('link[rel="canonical"]')?.getAttribute("href") || "").trim();
+  const bodyText = ((doc.body?.innerText || stripHtmlToText(html) || "").replace(/\s+/g, " ").trim());
+  const headingText = [...doc.querySelectorAll("h1, h2, h3")].map((el) => el.textContent.trim()).filter(Boolean).slice(0, 30).join(" ");
+  const buttonText = [...doc.querySelectorAll('button, [role="button"], a, summary')].map((el) => el.textContent.trim()).filter(Boolean).slice(0, 60).join(" ");
+  const altText = [...doc.querySelectorAll("img[alt]")].map((el) => el.getAttribute("alt")?.trim()).filter(Boolean).slice(0, 40).join(" ");
+  const metaSignals = extractMetaSignals(doc, pageUrl);
+  const structuredData = extractStructuredData(doc);
+  const inlineSignals = extractInlineSignals(doc, html, pageUrl);
+  const commerceSignals = extractCommerceSignals(doc, html, structuredData, inlineSignals, pageUrl);
+  const linkedResources = await inspectLinkedResources(doc, pageUrl);
+  const platformApiSignals = await inspectPlatformApiSignals(pageUrl, html, structuredData);
+  const domStats = collectDomStats(doc, structuredData);
+  const jsonLdText = structuredData.map((item) => item.text).join(" ");
+  const assetText = [
+    ...linkedResources.css.map((item) => item.text),
+    ...linkedResources.scripts.map((item) => item.text),
+    ...platformApiSignals.textSnippets
+  ].join(" ");
+
+  const signalText = [
+    bodyText,
+    title,
+    metaDescription,
+    ogTitle,
+    ogDescription,
+    canonicalUrl,
+    headingText,
+    buttonText,
+    altText,
+    jsonLdText,
+    metaSignals.text,
+    inlineSignals.text,
+    commerceSignals.text,
+    assetText,
+    inlineSignals.urlHints.join(" "),
+    linkedResources.urlHints.join(" "),
+    platformApiSignals.urlHints.join(" ")
+  ].join(" ").replace(/\s+/g, " ").toLowerCase();
+
+  const evidenceBadges = ["HTML"];
+  if (title || metaDescription) evidenceBadges.push("Meta");
+  if (ogTitle || ogDescription || metaSignals.extraMetaCount) evidenceBadges.push("Open Graph");
+  if (structuredData.length) evidenceBadges.push("JSON-LD");
+  if (inlineSignals.inlineScripts) evidenceBadges.push("Inline JS");
+  if (inlineSignals.inlineStyles) evidenceBadges.push("Inline CSS");
+  if (commerceSignals.stateSnippets.length) evidenceBadges.push("App state");
+  if (linkedResources.css.length) evidenceBadges.push("CSS");
+  if (linkedResources.scripts.length) evidenceBadges.push("JS");
+  if (platformApiSignals.badges.length) evidenceBadges.push(...platformApiSignals.badges);
+
+  const extractedSignals = [
+    title ? "Title" : "",
+    metaDescription ? "Meta description" : "",
+    ogTitle || ogDescription ? "Open Graph" : "",
+    domStats.searchInputs ? "Search input" : "",
+    domStats.ctaCount ? "CTA/button" : "",
+    domStats.forms ? "Form" : "",
+    domStats.productForms ? "Product form" : "",
+    commerceSignals.priceSignals ? "Price signal" : "",
+    commerceSignals.variantSignals ? "Variant signal" : "",
+    commerceSignals.reviewMentions ? "Review signal" : "",
+    commerceSignals.shippingMentions ? "Shipping/returns signal" : "",
+    structuredData.some((item) => item.types.includes("Product")) ? "Product schema" : "",
+    structuredData.some((item) => item.types.includes("AggregateRating") || item.types.includes("Review")) ? "Review schema" : "",
+    domStats.reviewWidgets ? "Review widget" : "",
+    domStats.faqBlocks ? "FAQ content" : "",
+    platformApiSignals.badges.join(", ")
+  ].filter(Boolean);
+
+  const textStrength = Math.min(24, Math.round(bodyText.length / 220));
+  const structuredStrength = Math.min(20, structuredData.length * 5);
+  const linkedStrength = Math.min(20, linkedResources.assetCount * 4);
+  const inlineStrength = Math.min(16, inlineSignals.inlineScripts + inlineSignals.inlineStyles * 2 + Math.min(6, inlineSignals.urlHints.length > 0 ? 4 : 0));
+  const domStrength = Math.min(18, [domStats.ctaCount, domStats.forms, domStats.productForms, domStats.images > 2 ? 1 : 0, domStats.navLinks > 5 ? 1 : 0, domStats.structuredProductHints ? 1 : 0].reduce((sum, value) => sum + (value ? 3 : 0), 0));
+  const commerceStrength = Math.min(18, (
+    (commerceSignals.priceSignals ? 4 : 0)
+    + (commerceSignals.variantSignals ? 4 : 0)
+    + Math.min(4, commerceSignals.reviewMentions)
+    + Math.min(3, commerceSignals.shippingMentions)
+    + Math.min(3, commerceSignals.trustMentions)
+  ));
+  const platformStrength = Math.min(12, platformApiSignals.score || 0);
+  const reliabilityScore = Math.max(30, Math.min(98,
+    18
+    + textStrength
+    + (title ? 5 : 0)
+    + (metaDescription ? 4 : 0)
+    + (ogTitle || ogDescription ? 4 : 0)
+    + structuredStrength
+    + linkedStrength
+    + inlineStrength
+    + domStrength
+    + commerceStrength
+    + platformStrength
+  ));
+
+  return {
+    url: pageUrl,
+    title,
+    metaDescription,
+    ogTitle,
+    ogDescription,
+    canonicalUrl,
+    signalText,
+    structuredData,
+    resources: linkedResources,
+    resourceSummary: {
+      assetCount: linkedResources.assetCount + platformApiSignals.assetCount,
+      inlineCount: inlineSignals.inlineScripts + inlineSignals.inlineStyles + commerceSignals.stateSnippets.length,
+      totalSources: linkedResources.assetCount + platformApiSignals.assetCount + inlineSignals.inlineScripts + inlineSignals.inlineStyles + commerceSignals.stateSnippets.length + structuredData.length + 1
+    },
+    evidenceBadges: [...new Set(evidenceBadges)].slice(0, 10),
+    extractedSignals: [...new Set(extractedSignals)].slice(0, 12),
+    domStats,
+    commerceSignals,
+    platformApiSignals,
+    reliability: {
+      score: reliabilityScore,
+      label: reliabilityScore >= 80 ? "High" : reliabilityScore >= 50 ? "Medium" : "Low"
+    },
+    assetText,
+    inlineText: `${inlineSignals.text} ${commerceSignals.text}`,
+    resourceHints: [
+      ...linkedResources.css.map((item) => item.url),
+      ...linkedResources.scripts.map((item) => item.url),
+      ...linkedResources.urlHints,
+      ...inlineSignals.urlHints,
+      ...platformApiSignals.urlHints,
+      ...structuredData.flatMap((item) => item.types),
+      ...commerceSignals.productHandles
+    ].join(" "),
+    fetchMode: "parsed"
+  };
+}
+
+function extractInlineSignals(doc, html, pageUrl) {
+  const inlineScripts = [...doc.querySelectorAll('script:not([src])')]
+    .map((node) => (node.textContent || "").trim())
+    .filter(Boolean)
+    .slice(0, 12)
+    .map((text) => text.slice(0, MAX_INLINE_TEXT_CHARS));
+  const inlineStyles = [...doc.querySelectorAll('style')]
+    .map((node) => (node.textContent || "").trim())
+    .filter(Boolean)
+    .slice(0, 4)
+    .map((text) => text.slice(0, MAX_INLINE_TEXT_CHARS / 2));
+  const appStateScripts = [...doc.querySelectorAll('script[type="application/json"], script[type*="json" i]')]
+    .map((node) => (node.textContent || "").trim())
+    .filter(Boolean)
+    .slice(0, 6)
+    .map((text) => text.slice(0, MAX_INLINE_TEXT_CHARS));
+
+  const combined = [...inlineScripts, ...inlineStyles, ...appStateScripts].join(" ");
+  const urlHints = extractEmbeddedUrlsFromText(combined, pageUrl).slice(0, MAX_DISCOVERY_TEXT_URLS);
+  return {
+    inlineScripts: inlineScripts.length + appStateScripts.length,
+    inlineStyles: inlineStyles.length,
+    text: combined,
+    urlHints
+  };
+}
+
+function extractMetaSignals(doc, pageUrl) {
+  const metaNodes = [...doc.querySelectorAll('meta[name], meta[property], meta[itemprop]')].slice(0, 40);
+  const values = metaNodes.map((node) => `${node.getAttribute("name") || node.getAttribute("property") || node.getAttribute("itemprop")}: ${node.getAttribute("content") || ""}`.trim()).filter(Boolean);
+  const links = [...doc.querySelectorAll('link[rel][href]')].slice(0, 20).map((node) => `${node.getAttribute("rel")}: ${normalizeDiscoveredUrl(node.getAttribute("href"), pageUrl) || node.getAttribute("href") || ""}`.trim()).filter(Boolean);
+  return {
+    text: [...values, ...links].join(" "),
+    extraMetaCount: values.length + links.length
+  };
+}
+
+function extractCommerceSignals(doc, html, structuredData, inlineSignals, pageUrl) {
+  const textBank = [];
+  const stateSnippets = [];
+  const currencies = [...new Set((String(html || "").match(/(?:\$|€|£|USD|EUR|GBP|RON|CAD|AUD|JPY)/gi) || []).map((item) => item.toUpperCase()))].slice(0, 6);
+  const productHandles = [];
+  const reviewMentions = (String(html || "").match(/review|rating|stars?|testimonial|verified buyer/gi) || []).length;
+  const trustMentions = (String(html || "").match(/secure|guarantee|money[- ]back|trusted|encrypted/gi) || []).length;
+  const shippingMentions = (String(html || "").match(/shipping|delivery|returns?|refund|dispatch/gi) || []).length;
+  const variantSignals = /size|color|variant|swatch|option[1-3]/i.test(`${inlineSignals.text} ${html}`) || !!doc.querySelector('[name*="option" i], [class*="variant" i], [class*="swatch" i], select');
+  const priceSignals = hasCurrency(`${doc.body?.innerText || ""} ${html}`) || structuredData.some((item) => item.types.includes("Offer") || item.types.includes("Product"));
+
+  [...doc.querySelectorAll('script[type="application/json"], script[type*="json" i], script:not([src])')]
+    .slice(0, 12)
+    .forEach((node) => {
+      const raw = (node.textContent || "").trim();
+      if (!raw) return;
+      const snippet = raw.slice(0, MAX_INLINE_TEXT_CHARS);
+      if (/("variants"|"product"|"price"|"compare_at_price"|"inventory"|"sku"|"vendor"|"available")/i.test(snippet)) {
+        stateSnippets.push(snippet);
+        textBank.push(snippet);
+      }
+      const handleMatches = snippet.match(/"handle"\s*:\s*"([^"]+)"/gi) || [];
+      handleMatches.forEach((match) => {
+        const found = match.match(/"handle"\s*:\s*"([^"]+)"/i);
+        if (found?.[1]) productHandles.push(found[1]);
+      });
+    });
+
+  [...doc.querySelectorAll('[itemprop], [itemtype], [data-product], [data-product-id], [data-section-type], [data-cart-item-title]')]
+    .slice(0, 50)
+    .forEach((node) => {
+      const attrs = [
+        node.getAttribute('itemprop'),
+        node.getAttribute('itemtype'),
+        node.getAttribute('data-product'),
+        node.getAttribute('data-product-id'),
+        node.getAttribute('data-section-type'),
+        node.getAttribute('data-cart-item-title')
+      ].filter(Boolean);
+      if (attrs.length) textBank.push(attrs.join(' '));
+    });
+
+  structuredData.forEach((item) => {
+    if (item.raw) textBank.push(item.raw.slice(0, 4000));
+  });
+
+  return {
+    text: textBank.join(' '),
+    stateSnippets: stateSnippets.slice(0, 6),
+    currencies,
+    productHandles: [...new Set(productHandles)].slice(0, 8),
+    reviewMentions,
+    trustMentions,
+    shippingMentions,
+    variantSignals,
+    priceSignals
+  };
+}
+
+async function inspectPlatformApiSignals(pageUrl, html, structuredData) {
+  const output = { textSnippets: [], urlHints: [], badges: [], score: 0, assetCount: 0 };
+  const lower = String(html || '').toLowerCase();
+  const base = pageUrl || '';
+  if (!base) return output;
+
+  if (/shopify|cdn\.shopify\.com|myshopify\.com/.test(lower) || structuredData.some((item) => item.types.includes('Product'))) {
+    const productsEndpoint = normalizeDiscoveredUrl('/products.json?limit=12', base);
+    if (productsEndpoint) {
+      const response = await fetchTextResource(productsEndpoint);
+      if (response.ok && /^\s*[\[{]/.test(response.text)) {
+        output.badges.push('Shop API');
+        output.assetCount += 1;
+        output.score += 6;
+        output.textSnippets.push(response.text.slice(0, 12000));
+        try {
+          const parsed = JSON.parse(response.text);
+          const items = Array.isArray(parsed?.products) ? parsed.products : (Array.isArray(parsed) ? parsed : []);
+          items.slice(0, 12).forEach((item) => {
+            const handle = item?.handle;
+            if (handle) output.urlHints.push(normalizeDiscoveredUrl(`/products/${handle}`, base));
+          });
+        } catch (error) {}
+      }
+    }
+
+    const collectionsEndpoint = normalizeDiscoveredUrl('/collections.json?limit=12', base);
+    if (collectionsEndpoint) {
+      const response = await fetchTextResource(collectionsEndpoint);
+      if (response.ok && /^\s*[\[{]/.test(response.text)) {
+        output.badges.push('Collections API');
+        output.assetCount += 1;
+        output.score += 4;
+        output.textSnippets.push(response.text.slice(0, 8000));
+        try {
+          const parsed = JSON.parse(response.text);
+          const items = Array.isArray(parsed?.collections) ? parsed.collections : [];
+          items.slice(0, 12).forEach((item) => {
+            const handle = item?.handle;
+            if (handle) output.urlHints.push(normalizeDiscoveredUrl(`/collections/${handle}`, base));
+          });
+        } catch (error) {}
+      }
+    }
+  }
+
+  output.urlHints = [...new Set(output.urlHints.filter(Boolean))].slice(0, MAX_DISCOVERY_TEXT_URLS);
+  return output;
+}
+
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  async function run() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index], index);
+    }
+  }
+  const runners = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, () => run());
+  await Promise.all(runners);
+  return results;
+}
+
+function collectDomStats(doc, structuredData) {
+  return {
+    headings: doc.querySelectorAll('h1, h2, h3').length,
+    buttons: doc.querySelectorAll('button, [role="button"]').length,
+    ctaCount: [...doc.querySelectorAll('button, a, [role="button"]')].filter((el) => /shop|buy|cart|checkout|discover|learn more|start|subscribe/i.test(el.textContent || "")).length,
+    forms: doc.querySelectorAll('form').length,
+    productForms: doc.querySelectorAll('form[action*="/cart"], [data-product], [itemtype*="Product"]').length + (structuredData.some((item) => item.types.includes('Product')) ? 1 : 0),
+    searchInputs: doc.querySelectorAll('input[type="search"], [role="search"], form[action*="search" i]').length,
+    navLinks: doc.querySelectorAll('header a[href], nav a[href]').length,
+    images: doc.querySelectorAll('img, picture source').length,
+    accordions: doc.querySelectorAll('details, summary, [aria-expanded]').length,
+    reviewWidgets: doc.querySelectorAll('[class*="review" i], [data-rating], [itemprop="review"], [itemprop="aggregateRating"]').length,
+    faqBlocks: doc.querySelectorAll('[class*="faq" i], [id*="faq" i], details').length,
+    trustMentions: [...doc.querySelectorAll('body *')].filter((el) => /secure|returns|refund|guarantee|shipping/i.test((el.textContent || "").slice(0, 80))).length
+  };
+}
+
+function extractEmbeddedUrlsFromText(text, baseUrl) {
+  const matches = String(text || "").match(/https?:\/\/[^\s"'<>]+|\/(products?|collections?|category|categories|catalog|shop|store|item|p)\/[^\s"'<>]+/gi) || [];
+  return [...new Set(matches.map((value) => normalizeDiscoveredUrl(value, baseUrl)).filter(Boolean))];
+}
+
+function extractStructuredData(doc) {
+  return [...doc.querySelectorAll('script[type="application/ld+json"]')].map((node) => {
+    const raw = (node.textContent || "").trim();
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      const flat = Array.isArray(parsed) ? parsed : [parsed];
+      const types = [];
+      flat.forEach((item) => collectJsonLdTypes(item, types));
+      return { raw, text: JSON.stringify(parsed).slice(0, MAX_LINKED_RESOURCE_CHARS), types: [...new Set(types)] };
+    } catch (error) {
+      return { raw, text: raw.slice(0, MAX_LINKED_RESOURCE_CHARS), types: [] };
+    }
+  }).filter(Boolean);
+}
+
+function collectJsonLdTypes(value, bucket) {
+  if (!value) return;
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectJsonLdTypes(item, bucket));
+    return;
+  }
+  if (typeof value !== "object") return;
+  const rawType = value["@type"];
+  if (Array.isArray(rawType)) rawType.forEach((item) => item && bucket.push(String(item)));
+  else if (rawType) bucket.push(String(rawType));
+  if (value["@graph"]) collectJsonLdTypes(value["@graph"], bucket);
+}
+
+
+async function inspectLinkedResources(doc, pageUrl) {
+  const cssUrls = getInspectableResourceUrls(doc, pageUrl, 'link[rel*="stylesheet"][href]', 'href', MAX_LINKED_STYLESHEETS);
+  const scriptUrls = getInspectableResourceUrls(doc, pageUrl, 'script[src]', 'src', MAX_LINKED_SCRIPTS);
+  const urlHints = [];
+
+  const css = (await mapWithConcurrency(cssUrls, RESOURCE_FETCH_CONCURRENCY, async (url) => {
+    const text = await fetchLinkedResourceText(url);
+    if (!text) return null;
+    urlHints.push(...extractEmbeddedUrlsFromText(text, pageUrl));
+    return { url, text };
+  })).filter(Boolean);
+
+  const scripts = (await mapWithConcurrency(scriptUrls, RESOURCE_FETCH_CONCURRENCY, async (url) => {
+    const text = await fetchLinkedResourceText(url);
+    if (!text) return null;
+    urlHints.push(...extractEmbeddedUrlsFromText(text, pageUrl));
+    return { url, text };
+  })).filter(Boolean);
+
+  return { css, scripts, assetCount: css.length + scripts.length, urlHints: [...new Set(urlHints)].slice(0, MAX_DISCOVERY_TEXT_URLS) };
+}
+
+function getInspectableResourceUrls(doc, pageUrl, selector, attribute, limit) {
+  const origin = safeHostname(pageUrl);
+  const urls = [];
+  [...doc.querySelectorAll(selector)].forEach((node) => {
+    const raw = node.getAttribute(attribute);
+    if (!raw || urls.length >= limit) return;
+    try {
+      const resolved = new URL(raw, pageUrl).toString();
+      if (safeHostname(resolved) !== origin) return;
+      if (!urls.includes(resolved)) urls.push(resolved);
+    } catch (error) {
+      return;
+    }
+  });
+  return urls;
+}
+
+
+async function fetchLinkedResourceText(url) {
+  const result = await fetchTextResource(url);
+  return result.ok ? result.text.slice(0, MAX_LINKED_RESOURCE_CHARS) : "";
+}
+
+function truncateText(value, maxLength = 90) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1)}…`;
 }
 
 function validateFreePlanScope(plan, configuredPages) {
@@ -2012,6 +2932,11 @@ function hasAny(text, phrases) {
 
 function hasCurrency(text) {
   return /(\$|€|£|ron|usd|eur)\s?\d|(\d[\d,.]*)\s?(\$|€|£|ron|usd|eur)/i.test(text);
+}
+
+function hasStructuredDataType(context, ...types) {
+  const bucket = new Set((context?.structuredData || []).flatMap((item) => item.types || []).map((item) => String(item).toLowerCase()));
+  return types.some((type) => bucket.has(String(type).toLowerCase()));
 }
 
 function impactRank(label) {
