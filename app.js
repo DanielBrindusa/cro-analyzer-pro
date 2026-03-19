@@ -1,14 +1,12 @@
 
 
 const STATE = {
-  plan: "free",
+  plan: "pro",
   latestReport: null,
   productRows: 0,
   progress: null
 };
 
-const PRO_PAYMENT_LINK = "REPLACE_WITH_YOUR_STRIPE_PAYMENT_LINK";
-const PRO_UNLOCK_STORAGE_KEY = "croProAccessUnlocked";
 const FETCH_TIMEOUT_MS = 12000;
 const SPEED_TIMEOUT_MS = 12000;
 const LINKED_RESOURCE_TIMEOUT_MS = 9000;
@@ -28,8 +26,6 @@ const PAGE_FETCH_CACHE = new Map();
 const TEXT_FETCH_CACHE = new Map();
 
 
-const FREE_PLAN_USAGE_KEY = "croFreePlanUsageLedger";
-const FREE_PLAN_USAGE_COOKIE = "croFreePlanUsageLedger";
 const MULTI_PART_TLDS = [
   "co.uk", "org.uk", "gov.uk", "ac.uk",
   "com.au", "net.au", "org.au",
@@ -38,7 +34,6 @@ const MULTI_PART_TLDS = [
 ];
 
 const PAGE_TYPES = ["home", "category", "product", "cart"];
-const FREE_PLAN_MAX_RECOMMENDATIONS = 1000;
 const PAGE_LABELS = {
   general: "General",
   home: "Home page",
@@ -304,10 +299,6 @@ function ensureInitialUrlInputs() {
     addProductRow();
   }
 
-  if (STATE.plan === "pro" && document.getElementById("productUrlList") && getProductInputs().length < 2) {
-    addProductRow();
-  }
-
   if (document.getElementById("categoryUrlList") && getCategoryInputs().length === 0) {
     addCategoryRow();
   }
@@ -318,7 +309,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindUI();
   await loadAdsConfig();
   initAdSlots();
-  setPlan("free");
+  setPlan("pro");
   ensureInitialUrlInputs();
   renderSavedReports();
   renderTrendChart();
@@ -348,70 +339,38 @@ function bindUI() {
 }
 
 function setPlan(plan) {
-  STATE.plan = plan;
-  document.getElementById("freePlanCard")?.classList.toggle("featured", plan === "free");
-  document.getElementById("proPlanCard")?.classList.toggle("featured", plan === "pro");
+  STATE.plan = "pro";
+  document.getElementById("freePlanCard")?.classList.remove("featured");
+  document.getElementById("proPlanCard")?.classList.add("featured");
   enforceProductLimit();
   enforceCategoryLimit();
-  renderProPaymentState();
   ensureInitialUrlInputs();
 }
 
 
 function isProUnlocked() {
-  try {
-    return localStorage.getItem(PRO_UNLOCK_STORAGE_KEY) === "true";
-  } catch (error) {
-    return false;
-  }
+  return true;
 }
 
 function unlockPro() {
-  try {
-    localStorage.setItem(PRO_UNLOCK_STORAGE_KEY, "true");
-  } catch (error) {}
+  return true;
 }
 
 function handlePaymentReturn() {
-  try {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("payment") === "success" && params.get("plan") === "pro") {
-      unlockPro();
-      const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.hash || ""}`;
-      window.history.replaceState({}, document.title, cleanUrl);
-    }
-  } catch (error) {}
+  return true;
 }
 
 function renderProPaymentState() {
   const proButton = document.querySelector('.plan-button[data-plan="pro"]');
   if (proButton) {
-    proButton.textContent = isProUnlocked() ? "Use Pro" : "Unlock Pro";
+    proButton.textContent = "Included";
   }
 }
-
 
 function startProPayment() {
-  if (isProUnlocked()) {
-    setPlan("pro");
-    return;
-  }
-
-  STATE.plan = "free";
-  document.getElementById("freePlanCard")?.classList.add("featured");
-  document.getElementById("proPlanCard")?.classList.remove("featured");
-  renderProPaymentState();
-
-  if (!PRO_PAYMENT_LINK || PRO_PAYMENT_LINK.includes("REPLACE_WITH_YOUR_STRIPE_PAYMENT_LINK")) {
-    alert("Add your real Stripe payment link in app.js before using the Pro payment flow. Until payment is completed, only the Free version stays available.");
-    return;
-  }
-
-  const paymentWindow = window.open(PRO_PAYMENT_LINK, "_blank", "noopener,noreferrer,width=980,height=820");
-  if (!paymentWindow) {
-    window.location.href = PRO_PAYMENT_LINK;
-  }
+  setPlan("pro");
 }
+
 
 function addCategoryRow(value = "") {
   const list = document.getElementById("categoryUrlList");
@@ -539,13 +498,8 @@ function checkAnalysisDeadline(startedAt, maxRuntimeMs = ANALYSIS_MAX_RUNTIME_MS
 async function runAnalysis() {
   const analyzeButton = document.getElementById("analyzeButton");
   const discoverButton = document.getElementById("discoverButton");
-  const plan = STATE.plan;
+  const plan = "pro";
   setPlan(plan);
-
-  if (plan === "pro" && !isProUnlocked()) {
-    alert("Please complete the Pro payment first. Until payment is completed, only the Free version is available.");
-    return;
-  }
 
   const projectName = document.getElementById("projectName").value.trim() || "Untitled CRO audit";
   let configuredPages = buildPageTargets();
@@ -558,12 +512,6 @@ async function runAnalysis() {
   const estimatedPostUnits = 4 + (competitorUrl ? 2 : 0);
   const estimatedTotalUnits = Math.max(estimatedDiscoveryUnits + estimatedPageUnits + estimatedPostUnits, 8);
   const startedAt = Date.now();
-
-  const freePlanGuard = validateFreePlanScope(plan, configuredPages);
-  if (!freePlanGuard.allowed) {
-    alert(freePlanGuard.message);
-    return;
-  }
 
   analyzeButton.disabled = true;
   if (discoverButton) discoverButton.disabled = true;
@@ -609,7 +557,7 @@ async function runAnalysis() {
       await waitForNextPaint();
     }
 
-    const relevantChecklist = window.CRO_CHECKLIST.filter((item) => plan === "pro" || item.tier === "basic");
+    const relevantChecklist = window.CRO_CHECKLIST.slice();
     const pageResults = [];
     const recommendations = [];
     let totalChecks = 0;
@@ -690,8 +638,8 @@ async function runAnalysis() {
       if (impactDelta !== 0) return impactDelta;
       return (b.priority || 0) - (a.priority || 0);
     });
-    const recommendationLimit = plan === "pro" ? 20 : FREE_PLAN_MAX_RECOMMENDATIONS;
-    const topRecommendations = cleanedRecommendations.slice(0, recommendationLimit);
+    const recommendationLimit = cleanedRecommendations.length;
+    const topRecommendations = cleanedRecommendations.slice();
 
     if (competitorUrl) {
       checkAnalysisDeadline(startedAt);
@@ -700,10 +648,6 @@ async function runAnalysis() {
       updateProgress(progressUnits, analysisTotalUnits, "Benchmarking competitor signals...");
       competitorReport = await analyzeCompetitor(competitorUrl, plan);
       progressUnits += 1.2;
-    }
-
-    if (plan === "free") {
-      persistFreePlanScope(configuredPages);
     }
 
     const overallScore = totalAvailableWeight ? Math.round((totalPassedWeight / totalAvailableWeight) * 100) : 0;
@@ -2645,107 +2589,23 @@ function truncateText(value, maxLength = 90) {
 }
 
 function validateFreePlanScope(plan, configuredPages) {
-  if (plan !== "free") {
-    return { allowed: true };
-  }
-
-  const normalizedUrls = configuredPages
-    .map((page) => normalizeAuditUrl(page.url))
-    .filter(Boolean);
-
-  if (!normalizedUrls.length) {
-    return { allowed: true };
-  }
-
-  const storefronts = [...new Set(normalizedUrls.map((item) => item.storefrontKey))];
-  if (storefronts.length > 1) {
-    return {
-      allowed: false,
-      message: "Free plan can analyze only one storefront at a time. Please keep all URLs on the same storefront or switch to Pro."
-    };
-  }
-
-
-  const storefrontKey = storefronts[0];
-  const ledger = getFreePlanUsageLedger();
-  const existingEntry = ledger[storefrontKey];
-
-  if (!existingEntry) {
-    return { allowed: true };
-  }
-
-  const currentSet = [...new Set(normalizedUrls.map((item) => item.pageKey))].sort();
-  const lockedSet = [...new Set(existingEntry.pageKeys || [])].sort();
-  const isSameSet = currentSet.length === lockedSet.length && currentSet.every((value, index) => value === lockedSet[index]);
-
-  if (!isSameSet) {
-    return {
-      allowed: false,
-      message: `Free plan already locked a storefront sample for ${storefrontKey}. You can re-run the same saved sample, but you cannot add new page URLs little by little to audit the full site. Upgrade to Pro to analyze additional pages.`
-    };
-  }
-
   return { allowed: true };
 }
 
 function persistFreePlanScope(configuredPages) {
-  const normalizedUrls = configuredPages
-    .map((page) => normalizeAuditUrl(page.url))
-    .filter(Boolean);
-
-  if (!normalizedUrls.length) return;
-
-  const storefrontKey = normalizedUrls[0].storefrontKey;
-  const ledger = getFreePlanUsageLedger();
-  const pageKeys = [...new Set(normalizedUrls.map((item) => item.pageKey))].sort();
-  const entry = ledger[storefrontKey] || {
-    storefrontKey,
-    firstLockedAt: new Date().toISOString()
-  };
-
-  entry.pageKeys = pageKeys;
-  entry.lastUsedAt = new Date().toISOString();
-  entry.urlCount = pageKeys.length;
-  ledger[storefrontKey] = entry;
-
-  writeFreePlanUsageLedger(ledger);
+  return true;
 }
 
 function getFreePlanUsageLedger() {
-  const combined = [
-    readJsonStorage(localStorage, FREE_PLAN_USAGE_KEY),
-    readJsonStorage(sessionStorage, FREE_PLAN_USAGE_KEY),
-    readCookieJson(FREE_PLAN_USAGE_COOKIE)
-  ];
-
-  return combined.reduce((acc, part) => mergeUsageLedgers(acc, part), {});
+  return {};
 }
 
 function writeFreePlanUsageLedger(ledger) {
-  const serialized = JSON.stringify(ledger);
-  try {
-    localStorage.setItem(FREE_PLAN_USAGE_KEY, serialized);
-  } catch (error) {}
-  try {
-    sessionStorage.setItem(FREE_PLAN_USAGE_KEY, serialized);
-  } catch (error) {}
-  setCookie(FREE_PLAN_USAGE_COOKIE, serialized, 3650);
+  return true;
 }
 
 function mergeUsageLedgers(base, extra) {
-  const output = { ...(base || {}) };
-  Object.entries(extra || {}).forEach(([storefrontKey, entry]) => {
-    const current = output[storefrontKey];
-    if (!current) {
-      output[storefrontKey] = entry;
-      return;
-    }
-
-    const currentTime = Date.parse(current.lastUsedAt || current.firstLockedAt || 0) || 0;
-    const incomingTime = Date.parse(entry.lastUsedAt || entry.firstLockedAt || 0) || 0;
-    output[storefrontKey] = incomingTime >= currentTime ? { ...current, ...entry } : { ...entry, ...current };
-  });
-  return output;
+  return { ...(base || {}), ...(extra || {}) };
 }
 
 function readJsonStorage(storage, key) {
