@@ -1215,17 +1215,32 @@ function detectShopifyThemeProjectName(rawHtml, context = null) {
   ].join(" ");
 
   const projectPatterns = [
-    /Shopify\.theme\s*=\s*\{[\s\S]{0,1200}?name\s*[:=]\s*["\']([^"\']+)["\'][\s\S]{0,1200}?(?:id|role|theme_store_id)\s*[:=]/i,
-    /Shopify\.theme\s*=\s*\{[\s\S]{0,1200}?(?:id|role|theme_store_id)\s*[:=][\s\S]{0,1200}?name\s*[:=]\s*["\']([^"\']+)["\']/i,
-    /"theme"\s*:\s*\{[\s\S]{0,1200}?"name"\s*:\s*"([^"]+)"[\s\S]{0,1200}?(?:"id"|"role"|"theme_store_id")\s*:/i,
-    /"theme"\s*:\s*\{[\s\S]{0,1200}?(?:"id"|"role"|"theme_store_id")\s*:[\s\S]{0,1200}?"name"\s*:\s*"([^"]+)"/i,
-    /data-shopify-theme-name\s*=\s*["\']([^"\']+)["\']/i
+    /Shopify\.theme\s*=\s*\{[\s\S]{0,1200}?name\s*[:=]\s*["']([^"']+)["']/i,
+    /"theme"\s*:\s*\{[\s\S]{0,1200}?"name"\s*:\s*"([^"]+)"/i,
+    /"theme_name"\s*:\s*"([^"]+)"/i,
+    /data-theme-name\s*=\s*["']([^"']+)["']/i,
+    /data-shopify-theme-name\s*=\s*["']([^"']+)["']/i
   ];
+
+  const knownThemes = new Set([
+    "Dawn", "Sense", "Refresh", "Craft", "Studio", "Ride", "Taste", "Colorblock", "Crave", "Publisher", "Origin",
+    "Impulse", "Prestige", "Pipeline", "Motion", "Enterprise", "Symmetry", "Blockshop", "Warehouse", "Broadcast",
+    "Impact", "Focal", "Be Yours", "Local", "Expanse", "Turbo", "Flex", "Retina", "Parallax", "Streamline",
+    "Venue", "Icon", "Palo Alto", "Canopy", "District", "Empire", "Modular", "California", "Atlantic", "Editions",
+    "Baseline", "Emerge", "Testament", "Highlight", "Split", "Showcase", "Xtra", "Kalles", "Minimog", "Ella"
+  ]);
 
   for (const pattern of projectPatterns) {
     const match = combinedText.match(pattern);
     const normalized = normalizeThemeProjectName(match?.[1]);
-    if (normalized) return normalized;
+    if (!normalized) continue;
+
+    const matchText = String(match?.[0] || "");
+    const isStructuredShopifyThemeObject = /Shopify\.theme|"theme"\s*:|"theme_name"|data-shopify-theme-name/i.test(matchText);
+    const looksLikeGenericThemeName = knownThemes.has(normalized);
+
+    if (isStructuredShopifyThemeObject) return normalized;
+    if (!looksLikeGenericThemeName) return normalized;
   }
 
   return "";
