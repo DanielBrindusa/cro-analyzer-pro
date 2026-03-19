@@ -253,30 +253,14 @@ html, body{
   word-break: break-word;
 }
 
-.tag-row,
-.page-evidence{
-  display:flex;
-  flex-wrap:wrap;
-  gap:8px;
-  min-width:0;
-  align-items:flex-start;
-}
-
-.page-evidence{
-  margin-top:10px;
+.tag-row{
+  min-width: 0;
+  overflow: hidden;
 }
 
 .tag{
-  display:inline-flex;
-  align-items:center;
-  max-width:100%;
-  overflow-wrap:anywhere;
-  word-break:break-word;
-  line-height:1.35;
-}
-
-.page-top > .tag{
-  flex:0 0 auto;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 img{

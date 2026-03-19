@@ -38,7 +38,7 @@ const MULTI_PART_TLDS = [
 ];
 
 const PAGE_TYPES = ["home", "category", "product", "cart"];
-const FREE_PLAN_MAX_RECOMMENDATIONS = Number.POSITIVE_INFINITY;
+const FREE_PLAN_MAX_RECOMMENDATIONS = 1000;
 const PAGE_LABELS = {
   general: "General",
   home: "Home page",
@@ -304,7 +304,7 @@ function ensureInitialUrlInputs() {
     addProductRow();
   }
 
-  if (STATE.plan === "pro" && document.getElementById("productUrlList") && getProductInputs().length < 2) {
+  if (document.getElementById("productUrlList") && getProductInputs().length < 2) {
     addProductRow();
   }
 
@@ -650,7 +650,7 @@ async function runAnalysis() {
         stackSummary = pageAnalysis.stack;
         progressUnits += 0.45;
         updateProgress(progressUnits, analysisTotalUnits, "Checking homepage performance signals...");
-        homePageSpeed = await measureHomepageSpeed(target.url, fetchResult);
+        homePageSpeed = await fetchPageSpeedScore(target.url);
       }
 
       totalChecks += pageAnalysis.appliedChecks.length;
@@ -690,7 +690,8 @@ async function runAnalysis() {
       if (impactDelta !== 0) return impactDelta;
       return (b.priority || 0) - (a.priority || 0);
     });
-    const topRecommendations = cleanedRecommendations.slice();
+    const recommendationLimit = plan === "pro" ? 20 : FREE_PLAN_MAX_RECOMMENDATIONS;
+    const topRecommendations = cleanedRecommendations.slice(0, recommendationLimit);
 
     if (competitorUrl) {
       checkAnalysisDeadline(startedAt);
@@ -885,9 +886,7 @@ async function fetchPageHtml(url) {
       source: "blocked",
       mode: "none",
       contentType: "",
-      url: "",
-      timingMs: null,
-      transferBytes: 0
+      url: ""
     };
   }
 
@@ -903,12 +902,10 @@ async function fetchPageHtml(url) {
       const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
       try {
-        const startedAt = performance.now();
-        const response = await fetch(attempt.url, { method: "GET", signal: controller.signal, cache: "no-store" });
+        const response = await fetch(attempt.url, { method: "GET", signal: controller.signal });
         clearTimeout(timeoutId);
         if (!response.ok) continue;
         const text = await response.text();
-        const timingMs = Math.round(performance.now() - startedAt);
         const normalized = normalizeFetchedPageMarkup(text, attempt.type, normalizedUrl, response.headers.get("content-type") || "");
         if (normalized.html && normalized.html.length > 120) {
           return {
@@ -919,9 +916,7 @@ async function fetchPageHtml(url) {
             mode: normalized.mode,
             contentType: response.headers.get("content-type") || "",
             url: normalizedUrl,
-            finalUrl: response.url || normalizedUrl,
-            timingMs,
-            transferBytes: getApproxByteSize(text)
+            finalUrl: response.url || normalizedUrl
           };
         }
       } catch (error) {
@@ -937,9 +932,7 @@ async function fetchPageHtml(url) {
       mode: "none",
       contentType: "",
       url: normalizedUrl,
-      finalUrl: normalizedUrl,
-      timingMs: null,
-      transferBytes: 0
+      finalUrl: normalizedUrl
     };
   })();
 
@@ -975,7 +968,7 @@ function normalizeFetchedPageMarkup(text, source, pageUrl, contentType = "") {
     return { html: raw, rawText: stripHtmlToText(raw), mode: "html" };
   }
 
-  if (String(source || "").startsWith("jina")) {
+  if (source === "jina") {
     const cleaned = raw
       .replace(/^Title:\s*/im, "")
       .replace(/^URL Source:\s*/im, "")
@@ -1004,7 +997,7 @@ async function fetchPageSpeedScore(url) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), SPEED_TIMEOUT_MS);
     const endpoint = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?strategy=mobile&url=${encodeURIComponent(url)}`;
-    const response = await fetch(endpoint, { signal: controller.signal, cache: "no-store" });
+    const response = await fetch(endpoint, { signal: controller.signal });
     clearTimeout(timeoutId);
     if (!response.ok) return null;
 
@@ -1014,151 +1007,11 @@ async function fetchPageSpeedScore(url) {
 
     return {
       score: Math.round(score * 100),
-      source: "Google PageSpeed",
-      method: "pagespeed",
-      note: "Google PageSpeed mobile score"
+      source: "Google PageSpeed"
     };
   } catch (error) {
     return null;
   }
-}
-
-function getApproxByteSize(value) {
-  try {
-    return new Blob([String(value || "")]).size;
-  } catch (error) {
-    return String(value || "").length;
-  }
-}
-
-function scoreFetchTimeMs(timingMs) {
-  const ms = Number(timingMs);
-  if (!Number.isFinite(ms) || ms <= 0) return 55;
-  if (ms <= 800) return 96;
-  if (ms <= 1200) return 90;
-  if (ms <= 1800) return 82;
-  if (ms <= 2500) return 74;
-  if (ms <= 3500) return 64;
-  if (ms <= 5000) return 52;
-  if (ms <= 7000) return 38;
-  return 24;
-}
-
-function estimateHomepageSpeedFromFetchResult(fetchResult) {
-  if (!fetchResult?.ok || !fetchResult?.html) return null;
-
-  try {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(fetchResult.html, "text/html");
-    const imageCount = doc.querySelectorAll("img").length;
-    const stylesheetCount = doc.querySelectorAll('link[rel*="stylesheet"][href]').length;
-    const scriptNodes = [...doc.querySelectorAll("script")];
-    const linkedScriptCount = scriptNodes.filter((node) => !!node.getAttribute("src")).length;
-    const renderBlockingScriptCount = scriptNodes.filter((node) => {
-      if (!node.getAttribute("src")) return false;
-      return !node.hasAttribute("async") && !node.hasAttribute("defer") && node.getAttribute("type") !== "module";
-    }).length;
-    const lazyImageCount = doc.querySelectorAll('img[loading="lazy"]').length;
-    const htmlBytes = Number(fetchResult.transferBytes) || getApproxByteSize(fetchResult.html);
-    const assetCount = stylesheetCount + linkedScriptCount + imageCount;
-    const inlineJsBytes = getApproxByteSize(scriptNodes.filter((node) => !node.getAttribute("src")).map((node) => node.textContent || "").join("\n"));
-    const inlineCssBytes = getApproxByteSize([...doc.querySelectorAll("style")].map((node) => node.textContent || "").join("\n"));
-
-    let score = scoreFetchTimeMs(fetchResult.timingMs);
-    score -= Math.max(0, Math.min(16, Math.round((htmlBytes - 70000) / 22000)));
-    score -= Math.max(0, Math.min(18, Math.round((assetCount - 20) * 0.65)));
-    score -= Math.max(0, Math.min(12, Math.round((imageCount - 12) * 0.55)));
-    score -= Math.max(0, Math.min(10, renderBlockingScriptCount * 2));
-    score -= Math.max(0, Math.min(8, Math.round((inlineJsBytes - 30000) / 12000)));
-    score -= Math.max(0, Math.min(6, Math.round((inlineCssBytes - 15000) / 7000)));
-
-    if (imageCount && lazyImageCount / imageCount >= 0.5) score += 3;
-    if (assetCount <= 18) score += 2;
-    if (htmlBytes <= 90000) score += 2;
-
-    const normalizedScore = Math.max(12, Math.min(96, Math.round(score)));
-    const sourceMap = {
-      direct: "Live homepage fetch estimate",
-      allorigins: "Homepage fetch estimate",
-      codetabs: "Homepage fetch estimate",
-      jina: "Homepage content estimate",
-      "jina-protocol": "Homepage content estimate"
-    };
-
-    return {
-      score: normalizedScore,
-      source: sourceMap[fetchResult.source] || "Homepage speed estimate",
-      method: "estimated",
-      note: `Estimated from homepage response time, HTML size, and ${assetCount} detected assets`,
-      metrics: {
-        timingMs: Number(fetchResult.timingMs) || null,
-        htmlBytes,
-        assetCount,
-        imageCount,
-        stylesheetCount,
-        linkedScriptCount,
-        renderBlockingScriptCount
-      }
-    };
-  } catch (error) {
-    return null;
-  }
-}
-
-function estimateHomepageSpeedFromTextResult(textResult) {
-  if (!textResult?.ok || !textResult?.text) return null;
-
-  const rawText = String(textResult.text || "");
-  const normalizedText = rawText.replace(/\s+/g, " ").trim();
-  if (!normalizedText) return null;
-
-  const htmlLikeSignalCount = [
-    /<html[\s>]|<body[\s>]|<!doctype html/i.test(rawText) ? 1 : 0,
-    /<title[\s>]|<meta[\s>]|<script[\s>]|<link[\s>]/i.test(rawText) ? 1 : 0,
-    /(shopify|woocommerce|bigcommerce|collection|product|add to cart)/i.test(rawText) ? 1 : 0
-  ].reduce((sum, value) => sum + value, 0);
-
-  const htmlBytes = Number(textResult.transferBytes) || getApproxByteSize(rawText);
-  const timingScore = scoreFetchTimeMs(textResult.timingMs);
-  const contentScore = htmlBytes >= 180000 ? 84 : htmlBytes >= 100000 ? 76 : htmlBytes >= 50000 ? 68 : htmlBytes >= 20000 ? 61 : 55;
-  const confidenceBoost = htmlLikeSignalCount >= 2 ? 4 : htmlLikeSignalCount === 1 ? 1 : -2;
-  const score = Math.round((timingScore * 0.72) + (contentScore * 0.28) + confidenceBoost);
-  const normalizedScore = Math.max(12, Math.min(96, score));
-  const sourceMap = {
-    direct: "Homepage response estimate",
-    allorigins: "Homepage response estimate",
-    codetabs: "Homepage response estimate",
-    jina: "Homepage content estimate",
-    "jina-protocol": "Homepage content estimate"
-  };
-
-  return {
-    score: normalizedScore,
-    source: sourceMap[textResult.source] || "Homepage response estimate",
-    method: "estimated-text",
-    note: `Estimated from homepage response time and ${Math.round(htmlBytes / 1024)} KB of fetched homepage content`,
-    metrics: {
-      timingMs: Number(textResult.timingMs) || null,
-      htmlBytes,
-      contentOnly: true,
-      htmlLikeSignalCount
-    }
-  };
-}
-
-async function measureHomepageSpeed(url, existingFetchResult = null) {
-  const pageSpeed = await fetchPageSpeedScore(url);
-  if (pageSpeed) return pageSpeed;
-
-  const fetchResult = existingFetchResult?.ok ? existingFetchResult : await fetchPageHtml(url);
-  const estimated = estimateHomepageSpeedFromFetchResult(fetchResult);
-  if (estimated) return estimated;
-
-  const textResult = await fetchTextResource(url);
-  const textEstimated = estimateHomepageSpeedFromTextResult(textResult);
-  if (textEstimated) return textEstimated;
-
-  return null;
 }
 
 function getScreenshotUrl(url, provider = "primary") {
@@ -1170,109 +1023,15 @@ function getScreenshotUrl(url, provider = "primary") {
   return `https://image.thum.io/get/width/1400/noanimate/${normalizedUrl}`;
 }
 
-const KNOWN_SHOPIFY_THEMES = [
-  "Dawn", "Refresh", "Sense", "Craft", "Studio", "Ride", "Origin", "Publisher",
-  "Impulse", "Prestige", "Focal", "Motion", "Symmetry", "Warehouse", "Broadcast",
-  "Streamline", "Turbo", "Flex", "Retina", "Pipeline", "Showcase", "Impact",
-  "Enterprise", "Venue", "Icon", "Local", "Expanse", "Modular", "Parallax",
-  "Palo Alto", "Testament"
-];
-
-function normalizeThemeToken(value) {
-  return String(value || "")
-    .replace(/[+_]+/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\btheme\b/gi, " ")
-    .replace(/[^a-z0-9 -]+/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function toTitleCase(value) {
-  return String(value || "")
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function matchKnownShopifyTheme(rawName = "") {
-  const normalized = normalizeThemeToken(rawName).toLowerCase();
-  if (!normalized) return "";
-  const squashed = normalized.replace(/\s+/g, "");
-  const match = KNOWN_SHOPIFY_THEMES.find((name) => {
-    const normalizedName = name.toLowerCase();
-    return normalizedName === normalized || normalizedName.replace(/\s+/g, "") === squashed;
-  });
-  return match || "";
-}
-
-function extractExplicitShopifyThemeName(html, context = null) {
-  const combined = [String(html || ""), String(context?.assetText || ""), String(context?.inlineText || ""), String(context?.resourceHints || "")].join(" ");
-  const explicitPatterns = [
-    /Shopify\.theme\s*=\s*\{[^}]{0,800}?["']name["']\s*:\s*["']([^"']{2,80})["']/i,
-    /["']theme(?:Name|_name)?["']\s*:\s*["']([^"']{2,80})["']/i,
-    /data-theme-name\s*=\s*["']([^"']{2,80})["']/i,
-    /themeName\s*=\s*["']([^"']{2,80})["']/i,
-    /\/themes?\/([a-z0-9][a-z0-9-]{2,40})(?:\/|\.(?:css|js))/i
-  ];
-  for (const regex of explicitPatterns) {
-    const match = combined.match(regex);
-    if (!match) continue;
-    const normalized = normalizeThemeToken(match[1]);
-    if (!normalized || normalized.length < 3) continue;
-    const known = matchKnownShopifyTheme(normalized);
-    return known || toTitleCase(normalized);
-  }
-  return "";
-}
-
-function detectKnownShopifyTheme(html, context = null) {
-  const combined = [String(html || ""), String(context?.assetText || ""), String(context?.inlineText || ""), String(context?.resourceHints || "")].join(" ");
-  let bestTheme = "";
-  let bestScore = 0;
-
-  for (const themeName of KNOWN_SHOPIFY_THEMES) {
-    const slug = themeName.toLowerCase().replace(/\s+/g, "-");
-    const compact = themeName.toLowerCase().replace(/\s+/g, "");
-    const spaced = themeName.replace(/\s+/g, "\\s+");
-    const patterns = [
-      new RegExp(`["']name["']\\s*:\\s*["']${spaced}["']`, "i"),
-      new RegExp(`["']theme(?:name|_name)?["']\\s*:\\s*["']${spaced}["']`, "i"),
-      new RegExp(`/(?:${slug}|${compact})(?:[._-][a-z0-9_-]+)?\\.(?:css|js)\\b`, "i"),
-      new RegExp(`\\b${spaced}\\b(?=[^a-z0-9]|$)`, "i")
-    ];
-
-    let score = 0;
-    if (patterns[0].test(combined)) score += 4;
-    if (patterns[1].test(combined)) score += 4;
-    if (patterns[2].test(combined)) score += 2;
-    if (patterns[3].test(combined) && /(shopify|theme|cdn\/shop|assets)/i.test(combined)) score += 1;
-
-    if (score > bestScore) {
-      bestTheme = themeName;
-      bestScore = score;
-    }
-  }
-
-  return bestScore >= 2 ? bestTheme : "";
-}
-
 function detectStoreStack(doc, text, html, url, context = null) {
   const lowerHtml = `${String(html || "").toLowerCase()} ${(context?.assetText || "").toLowerCase()} ${(context?.inlineText || "").toLowerCase()} ${(context?.resourceHints || "").toLowerCase()}`;
   const hostname = safeHostname(url);
   const signals = { platform: "Unknown", theme: "Unknown", apps: [], badges: [], signals: [] };
 
-  if (/cdn\.shopify\.com|shopify\.theme|x-shopify-stage|shopify-payment-button|myshopify\.com|\/cdn\/shop\//i.test(lowerHtml) || /shopify/i.test(hostname)) signals.platform = "Shopify";
+  if (/cdn\.shopify\.com|shopify\.theme|x-shopify-stage|shopify-payment-button/i.test(html)) signals.platform = "Shopify";
   else if (/woocommerce|wp-content\/plugins\/woocommerce/i.test(lowerHtml)) signals.platform = "WooCommerce";
   else if (/bigcommerce/i.test(lowerHtml)) signals.platform = "BigCommerce";
-
-  if (signals.platform === "Shopify") {
-    const explicitTheme = extractExplicitShopifyThemeName(html, context);
-    const patternTheme = detectKnownShopifyTheme(html, context);
-    signals.theme = explicitTheme || patternTheme || "Unknown";
-  }
+  else if (/myshopify\.com/i.test(lowerHtml) || /shopify/i.test(hostname)) signals.platform = "Shopify";
 
   const appTests = [
     ["judge.me", /judge\.me/i],
@@ -1291,6 +1050,17 @@ function detectStoreStack(doc, text, html, url, context = null) {
     ["Nosto", /nosto/i]
   ];
   appTests.forEach(([name, regex]) => { if (regex.test(lowerHtml)) signals.apps.push(name); });
+
+  const themePatterns = [
+    ["Dawn", /theme_store_id.*?887|"name"\s*:\s*"dawn"/i],
+    ["Impulse", /impulse/i],
+    ["Prestige", /prestige/i],
+    ["Refresh", /refresh/i],
+    ["Turbo", /turbo/i]
+  ];
+  for (const [name, regex] of themePatterns) {
+    if (regex.test(lowerHtml)) { signals.theme = name; break; }
+  }
 
   if (hasAny(text, ["free shipping", "free delivery"])) signals.badges.push("Free shipping");
   if (hasAny(text, ["money-back", "money back", "guarantee"])) signals.badges.push("Guarantee");
@@ -1465,7 +1235,7 @@ function extractUrlsFromXml(text, baseUrl) {
 
 async function fetchTextResource(url) {
   const normalizedUrl = String(url || "").trim();
-  if (!normalizedUrl) return { ok: false, source: "blocked", text: "", url: "", timingMs: null, transferBytes: 0 };
+  if (!normalizedUrl) return { ok: false, source: "blocked", text: "", url: "" };
 
   if (TEXT_FETCH_CACHE.has(normalizedUrl)) {
     return TEXT_FETCH_CACHE.get(normalizedUrl);
@@ -1478,27 +1248,17 @@ async function fetchTextResource(url) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
       try {
-        const startedAt = performance.now();
-        const response = await fetch(attempt.url, { method: "GET", signal: controller.signal, cache: "no-store" });
+        const response = await fetch(attempt.url, { method: "GET", signal: controller.signal });
         clearTimeout(timeoutId);
         if (!response.ok) continue;
         const text = await response.text();
-        if (text && text.length > 20) {
-          return {
-            ok: true,
-            source: attempt.type,
-            text,
-            url: normalizedUrl,
-            timingMs: Math.round(performance.now() - startedAt),
-            transferBytes: getApproxByteSize(text)
-          };
-        }
+        if (text && text.length > 20) return { ok: true, source: attempt.type, text, url: normalizedUrl };
       } catch (error) {
         clearTimeout(timeoutId);
       }
     }
 
-    return { ok: false, source: "blocked", text: "", url: normalizedUrl, timingMs: null, transferBytes: 0 };
+    return { ok: false, source: "blocked", text: "", url: normalizedUrl };
   })();
 
   TEXT_FETCH_CACHE.set(normalizedUrl, request);
@@ -1680,7 +1440,7 @@ async function discoverUrlsAdvanced(homeUrl, setStatus = () => {}) {
 function autoFillDiscoveredUrls(discovered, plan) {
   const categoryInputs = getCategoryInputs();
   if (!categoryInputs.some((input) => input.value.trim()) && discovered.categories.length) {
-    discovered.categories.forEach((url, index) => {
+    discovered.categories.slice(0, plan === "pro" ? MAX_AUTO_DISCOVERED_CATEGORIES : 1).forEach((url, index) => {
       if (index === 0 && categoryInputs[0]) categoryInputs[0].value = url;
       else addCategoryRow(url);
     });
@@ -1688,7 +1448,7 @@ function autoFillDiscoveredUrls(discovered, plan) {
 
   const productInputs = getProductInputs();
   if (!productInputs.some((input) => input.value.trim()) && discovered.products.length) {
-    discovered.products.forEach((url, index) => {
+    discovered.products.slice(0, plan === "pro" ? MAX_AUTO_DISCOVERED_PRODUCTS : Math.min(3, discovered.products.length)).forEach((url, index) => {
       if (index < productInputs.length) productInputs[index].value = url;
       else addProductRow(url);
     });
@@ -1702,7 +1462,7 @@ async function analyzeCompetitor(url, plan) {
   const general = await analyzePage("general", fetchResult, plan);
   const totalWeight = home.totalWeight + general.totalWeight;
   const scoreWeight = home.scoreWeight + general.scoreWeight;
-  const speed = await measureHomepageSpeed(url, fetchResult);
+  const speed = await fetchPageSpeedScore(url);
   return {
     url,
     fetched: fetchResult.ok,
@@ -1867,6 +1627,7 @@ function buildManualRecommendations(checklist, pageResults, plan) {
       if (item.page === "general") return item.priorityScore >= 4 || item.defaultEvaluation === "Bad" || item.defaultEvaluation === "Can be Improved";
       return !pageStatus.has(item.page) || item.priorityScore >= 5 || item.defaultEvaluation === "Bad";
     })
+    .slice(0, plan === "pro" ? 60 : FREE_PLAN_MAX_RECOMMENDATIONS)
     .map((item) => ({
       title: item.checkpoint,
       detail: `Review this area on the ${item.pageLabel.toLowerCase()} under ${item.section}.`,
@@ -1917,15 +1678,13 @@ function renderHomeSpeedMetric(homePageSpeed) {
   const score = typeof homePageSpeed === "number"
     ? homePageSpeed
     : (homePageSpeed && typeof homePageSpeed.score === "number" ? homePageSpeed.score : null);
-  const source = homePageSpeed && typeof homePageSpeed === "object" ? homePageSpeed.source : "";
-  const note = homePageSpeed && typeof homePageSpeed === "object" ? homePageSpeed.note : "";
 
   speedCard.classList.remove("speed-good", "speed-medium", "speed-bad", "speed-unknown");
   speedCard.classList.add(getSpeedClass(score));
 
   scoreElement.textContent = score != null ? `${score}/100` : "Unavailable";
   labelElement.textContent = score != null
-    ? `${getSpeedMessage(score)}${source ? ` · ${source}` : ""}${note ? ` · ${note}` : ""}`
+    ? `${getSpeedMessage(score)} · Google PageSpeed mobile score`
     : getSpeedMessage(score);
 
   let gauge = speedCard.querySelector(".speed-meter");
@@ -2817,6 +2576,46 @@ function truncateText(value, maxLength = 90) {
 }
 
 function validateFreePlanScope(plan, configuredPages) {
+  if (plan !== "free") {
+    return { allowed: true };
+  }
+
+  const normalizedUrls = configuredPages
+    .map((page) => normalizeAuditUrl(page.url))
+    .filter(Boolean);
+
+  if (!normalizedUrls.length) {
+    return { allowed: true };
+  }
+
+  const storefronts = [...new Set(normalizedUrls.map((item) => item.storefrontKey))];
+  if (storefronts.length > 1) {
+    return {
+      allowed: false,
+      message: "Free plan can analyze only one storefront at a time. Please keep all URLs on the same storefront or switch to Pro."
+    };
+  }
+
+
+  const storefrontKey = storefronts[0];
+  const ledger = getFreePlanUsageLedger();
+  const existingEntry = ledger[storefrontKey];
+
+  if (!existingEntry) {
+    return { allowed: true };
+  }
+
+  const currentSet = [...new Set(normalizedUrls.map((item) => item.pageKey))].sort();
+  const lockedSet = [...new Set(existingEntry.pageKeys || [])].sort();
+  const isSameSet = currentSet.length === lockedSet.length && currentSet.every((value, index) => value === lockedSet[index]);
+
+  if (!isSameSet) {
+    return {
+      allowed: false,
+      message: `Free plan already locked a storefront sample for ${storefrontKey}. You can re-run the same saved sample, but you cannot add new page URLs little by little to audit the full site. Upgrade to Pro to analyze additional pages.`
+    };
+  }
+
   return { allowed: true };
 }
 
