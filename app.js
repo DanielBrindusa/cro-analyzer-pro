@@ -1215,10 +1215,11 @@ function detectShopifyThemeProjectName(rawHtml, context = null) {
   ].join(" ");
 
   const projectPatterns = [
-    /Shopify\.theme\s*=\s*\{[\s\S]{0,1200}?name\s*[:=]\s*["']([^"']+)["']/i,
-    /"theme"\s*:\s*\{[\s\S]{0,1200}?"name"\s*:\s*"([^"]+)"/i,
-    /"theme_name"\s*:\s*"([^"]+)"/i,
-    /data-theme-name\s*=\s*["']([^"']+)["']/i
+    /Shopify\.theme\s*=\s*\{[\s\S]{0,1200}?name\s*[:=]\s*["\']([^"\']+)["\'][\s\S]{0,1200}?(?:id|role|theme_store_id)\s*[:=]/i,
+    /Shopify\.theme\s*=\s*\{[\s\S]{0,1200}?(?:id|role|theme_store_id)\s*[:=][\s\S]{0,1200}?name\s*[:=]\s*["\']([^"\']+)["\']/i,
+    /"theme"\s*:\s*\{[\s\S]{0,1200}?"name"\s*:\s*"([^"]+)"[\s\S]{0,1200}?(?:"id"|"role"|"theme_store_id")\s*:/i,
+    /"theme"\s*:\s*\{[\s\S]{0,1200}?(?:"id"|"role"|"theme_store_id")\s*:[\s\S]{0,1200}?"name"\s*:\s*"([^"]+)"/i,
+    /data-shopify-theme-name\s*=\s*["\']([^"\']+)["\']/i
   ];
 
   for (const pattern of projectPatterns) {
@@ -1248,32 +1249,6 @@ function detectShopifyThemeName(rawHtml, lowerHtml, context = null, detectedProj
   ];
   if (normalizedProjectName && knownThemes.includes(normalizedProjectName)) return normalizedProjectName;
 
-  const directPatterns = [
-    /Shopify\.theme\s*=\s*\{[\s\S]{0,1200}?name\s*[:=]\s*["']([^"']+)["']/i,
-    /"theme"\s*:\s*\{[\s\S]{0,1200}?"name"\s*:\s*"([^"]+)"/i,
-    /"theme_name"\s*:\s*"([^"]+)"/i,
-    /data-theme-name\s*=\s*["']([^"']+)["']/i,
-    /theme-name["'\s:=>]+([A-Za-z][A-Za-z0-9\-\s]{1,60})/i,
-    /\/themes\/([A-Za-z0-9\-_% ]{2,80})\//i
-  ];
-
-  for (const pattern of directPatterns) {
-    const match = combinedText.match(pattern);
-    const normalized = normalizeThemeName(match?.[1]);
-    if (normalized) return normalized;
-  }
-
-  for (const themeName of knownThemes) {
-    const escaped = escapeRegex(themeName.toLowerCase());
-    const broadMarkers = [
-      new RegExp(`shopify\.theme[\s\S]{0,600}${escaped}`, 'i'),
-      new RegExp(`theme[^\n\r<>{}]{0,80}${escaped}`, 'i'),
-      new RegExp(`/themes/${escaped.replace(/\ /g, '[\-_ ]')}(?:/|\.|\?)`, 'i'),
-      new RegExp(`(?:theme-name|theme_name|data-theme-name)[^\n\r]{0,80}${escaped}`, 'i')
-    ];
-    if (broadMarkers.some((regex) => regex.test(lowerHtml))) return themeName;
-  }
-
   const themeStoreIdMap = new Map([
     ['887', 'Dawn'],
     ['1368', 'Sense'],
@@ -1290,6 +1265,30 @@ function detectShopifyThemeName(rawHtml, lowerHtml, context = null, detectedProj
   const storeIdMatch = combinedText.match(/theme_store_id\D{0,12}(\d{3,5})/i);
   if (storeIdMatch && themeStoreIdMap.has(storeIdMatch[1])) {
     return themeStoreIdMap.get(storeIdMatch[1]);
+  }
+
+  const directPatterns = [
+    /"theme_store_name"\s*:\s*"([^"]+)"/i,
+    /"theme_store_handle"\s*:\s*"([^"]+)"/i,
+    /theme-name["\'\s:=>]+([A-Za-z][A-Za-z0-9\-\s]{1,60})/i,
+    /\/themes\/([A-Za-z0-9\-_% ]{2,80})\//i
+  ];
+
+  for (const pattern of directPatterns) {
+    const match = combinedText.match(pattern);
+    const normalized = normalizeThemeName(match?.[1]);
+    if (normalized && knownThemes.includes(normalized)) return normalized;
+  }
+
+  for (const themeName of knownThemes) {
+    const escaped = escapeRegex(themeName.toLowerCase());
+    const broadMarkers = [
+      new RegExp(`theme_store_(?:name|handle)[^\n\r]{0,80}${escaped}`, 'i'),
+      new RegExp(`/themes/${escaped.replace(/\ /g, '[\-_ ]')}(?:/|\.|\?)`, 'i'),
+      new RegExp(`(?:theme-name|theme_name|data-theme-name)[^\n\r]{0,80}${escaped}`, 'i'),
+      new RegExp(`shopify_theme(?:_|-)store[^\n\r]{0,80}${escaped}`, 'i')
+    ];
+    if (broadMarkers.some((regex) => regex.test(lowerHtml))) return themeName;
   }
 
   return "";
