@@ -92,25 +92,6 @@ The application is structured around these primary page contexts:
 
 These labels are defined in the application state and are used across checks, reporting, and recommendation grouping.
 
-## Plan model
-
-The interface currently includes two plans:
-
-### Free
-
-- up to 5 product URLs in the main pricing interface
-- limited recommendation output
-- basic CRO checks
-
-### Pro
-
-- unlimited category or collection URLs
-- unlimited product URLs
-- full CRO check coverage
-- unlock flow designed for a payment-link based upgrade path
-
-The pricing cards and plan buttons are implemented in the HTML interface, while the plan logic and limits are enforced in `app.js`.
-
 ## Ad system
 
 A dedicated ad configuration file controls all monetization placements on the page.
@@ -185,27 +166,6 @@ The easiest way to embed the app is with an iframe.
 This approach keeps the app isolated, reduces CSS or JavaScript conflicts, and makes future updates easier because the embedded page can be updated independently of the host website.
 
 ## Customization guide
-
-### Change the payment link
-
-Open `app.js` and replace:
-
-```js
-const PRO_PAYMENT_LINK = "REPLACE_WITH_YOUR_STRIPE_PAYMENT_LINK";
-```
-
-with your actual payment URL. The app already contains the Pro unlock flow structure and return handling logic.
-
-### Change Free plan limits
-
-Open `app.js` and update the relevant constants, including:
-
-```js
-const FREE_PLAN_MAX_URLS_PER_STOREFRONT = 8;
-const FREE_PLAN_MAX_RECOMMENDATIONS = 10;
-```
-
-These constants govern Free plan behavior in the application logic.
 
 ### Add or edit CRO rules
 
