@@ -773,3 +773,28 @@ canvas{
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Page-by-page breakdown tag overlap fix */
+.page-evidence,
+.page-card .tag-row{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  align-items:flex-start;
+  min-width:0;
+  overflow:visible;
+}
+
+.page-evidence{
+  margin-top:10px;
+}
+
+.page-evidence .tag,
+.page-card .tag-row .tag,
+.page-card .page-top .tag{
+  display:inline-flex;
+  align-items:center;
+  max-width:100%;
+  white-space:normal;
+  line-height:1.35;
+}
