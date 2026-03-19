@@ -315,7 +315,6 @@ function ensureInitialUrlInputs() {
 
 
 document.addEventListener("DOMContentLoaded", async () => {
-  clearLegacyProjectLimits();
   bindUI();
   await loadAdsConfig();
   initAdSlots();
@@ -1162,7 +1161,7 @@ function detectStoreStack(doc, text, html, url, context = null) {
   const rawHtml = String(html || "");
   const lowerHtml = `${rawHtml.toLowerCase()} ${(context?.assetText || "").toLowerCase()} ${(context?.inlineText || "").toLowerCase()} ${(context?.resourceHints || "").toLowerCase()}`;
   const hostname = safeHostname(url);
-  const signals = { platform: "Unknown", theme: "Unknown", themeProjectName: "Unknown", apps: [], badges: [], signals: [] };
+  const signals = { platform: "Unknown", theme: "Unknown", apps: [], badges: [], signals: [] };
 
   if (/cdn\.shopify\.com|shopify\.theme|x-shopify-stage|shopify-payment-button/i.test(rawHtml)) signals.platform = "Shopify";
   else if (/woocommerce|wp-content\/plugins\/woocommerce/i.test(lowerHtml)) signals.platform = "WooCommerce";
@@ -1188,8 +1187,7 @@ function detectStoreStack(doc, text, html, url, context = null) {
   appTests.forEach(([name, regex]) => { if (regex.test(lowerHtml)) signals.apps.push(name); });
 
   if (signals.platform === "Shopify") {
-    signals.themeProjectName = detectShopifyThemeProjectName(rawHtml, context) || "Unknown";
-    signals.theme = detectShopifyThemeName(rawHtml, lowerHtml, context, signals.themeProjectName) || "Unknown";
+    signals.theme = detectShopifyThemeName(rawHtml, lowerHtml, context) || "Unknown";
   }
 
   if (hasAny(text, ["free shipping", "free delivery"])) signals.badges.push("Free shipping");
@@ -1206,47 +1204,13 @@ function detectStoreStack(doc, text, html, url, context = null) {
   return signals;
 }
 
-function detectShopifyThemeProjectName(rawHtml, context = null) {
+function detectShopifyThemeName(rawHtml, lowerHtml, context = null) {
   const combinedText = [
     rawHtml,
     context?.assetText || "",
     context?.inlineText || "",
     context?.resourceHints || ""
   ].join(" ");
-
-  const projectPatterns = [
-    /Shopify\.theme\s*=\s*\{[\s\S]{0,1200}?name\s*[:=]\s*["']([^"']+)["']/i,
-    /"theme"\s*:\s*\{[\s\S]{0,1200}?"name"\s*:\s*"([^"]+)"/i,
-    /"theme_name"\s*:\s*"([^"]+)"/i,
-    /data-theme-name\s*=\s*["']([^"']+)["']/i
-  ];
-
-  for (const pattern of projectPatterns) {
-    const match = combinedText.match(pattern);
-    const normalized = normalizeThemeProjectName(match?.[1]);
-    if (normalized) return normalized;
-  }
-
-  return "";
-}
-
-function detectShopifyThemeName(rawHtml, lowerHtml, context = null, detectedProjectName = "") {
-  const combinedText = [
-    rawHtml,
-    context?.assetText || "",
-    context?.inlineText || "",
-    context?.resourceHints || ""
-  ].join(" ");
-
-  const normalizedProjectName = normalizeThemeProjectName(detectedProjectName);
-  const knownThemes = [
-    "Dawn", "Sense", "Refresh", "Craft", "Studio", "Ride", "Taste", "Colorblock", "Crave", "Publisher", "Origin",
-    "Impulse", "Prestige", "Pipeline", "Motion", "Enterprise", "Symmetry", "Blockshop", "Warehouse", "Broadcast",
-    "Impact", "Focal", "Be Yours", "Local", "Expanse", "Turbo", "Flex", "Retina", "Parallax", "Streamline",
-    "Venue", "Icon", "Palo Alto", "Canopy", "District", "Empire", "Modular", "California", "Atlantic", "Editions",
-    "Baseline", "Emerge", "Testament", "Highlight", "Split", "Showcase", "Xtra", "Kalles", "Minimog", "Ella"
-  ];
-  if (normalizedProjectName && knownThemes.includes(normalizedProjectName)) return normalizedProjectName;
 
   const directPatterns = [
     /Shopify\.theme\s*=\s*\{[\s\S]{0,1200}?name\s*[:=]\s*["']([^"']+)["']/i,
@@ -1262,6 +1226,14 @@ function detectShopifyThemeName(rawHtml, lowerHtml, context = null, detectedProj
     const normalized = normalizeThemeName(match?.[1]);
     if (normalized) return normalized;
   }
+
+  const knownThemes = [
+    "Dawn", "Sense", "Refresh", "Craft", "Studio", "Ride", "Taste", "Colorblock", "Crave", "Publisher", "Origin",
+    "Impulse", "Prestige", "Pipeline", "Motion", "Enterprise", "Symmetry", "Blockshop", "Warehouse", "Broadcast",
+    "Impact", "Focal", "Be Yours", "Local", "Expanse", "Turbo", "Flex", "Retina", "Parallax", "Streamline",
+    "Venue", "Icon", "Palo Alto", "Canopy", "District", "Empire", "Modular", "California", "Atlantic", "Editions",
+    "Baseline", "Emerge", "Testament", "Highlight", "Split", "Showcase", "Xtra", "Kalles", "Minimog", "Ella"
+  ];
 
   for (const themeName of knownThemes) {
     const escaped = escapeRegex(themeName.toLowerCase());
@@ -1293,13 +1265,6 @@ function detectShopifyThemeName(rawHtml, lowerHtml, context = null, detectedProj
   }
 
   return "";
-}
-
-function normalizeThemeProjectName(value) {
-  const normalized = normalizeThemeName(value);
-  if (!normalized) return "";
-  if (/^(Live Theme|Main Theme|Published Theme|Preview Theme)$/i.test(normalized)) return "";
-  return normalized;
 }
 
 function normalizeThemeName(value) {
@@ -1957,10 +1922,6 @@ function renderReport(report) {
   document.getElementById("pagesAnalyzed").textContent = report.pagesAnalyzed;
   document.getElementById("revenueOpportunity").textContent = `${report.revenueOpportunity || estimateRevenueOpportunity(report.overallScore, report.criticalIssues, report.pagesAnalyzed)}%`;
   document.getElementById("revenueOpportunityLabel").textContent = "Heuristic upside from fixing the current gaps";
-  const themeProjectNameElement = document.getElementById("themeProjectName");
-  const themeProjectNameLabelElement = document.getElementById("themeProjectNameLabel");
-  if (themeProjectNameElement) themeProjectNameElement.textContent = report.stackSummary?.themeProjectName || "Unknown";
-  if (themeProjectNameLabelElement) themeProjectNameLabelElement.textContent = report.stackSummary?.platform === "Shopify" ? "Detected from the public storefront when exposed" : "Only available for Shopify storefronts when exposed";
   renderHomeSpeedMetric(report.homePageSpeed);
   const gauge = document.getElementById("scoreGaugeFill");
   if (gauge) gauge.style.width = `${Math.max(0, Math.min(100, report.overallScore))}%`;
@@ -2153,8 +2114,7 @@ function renderStackInsights(stackSummary) {
   container.innerHTML = `
     <div class="stack-grid">
       <div class="mini-stat"><strong>Platform</strong><div class="comp-sub">${escapeHtml(stackSummary.platform || "Unknown")}</div></div>
-      <div class="mini-stat"><strong>Theme family</strong><div class="comp-sub">${escapeHtml(stackSummary.theme || "Unknown")}</div></div>
-      <div class="mini-stat"><strong>Theme project name</strong><div class="comp-sub">${escapeHtml(stackSummary.themeProjectName || "Unknown")}</div></div>
+      <div class="mini-stat"><strong>Theme</strong><div class="comp-sub">${escapeHtml(stackSummary.theme || "Unknown")}</div></div>
     </div>
     <div class="tag-row">${apps}</div>
     <div class="tag-row">${badges || '<span class="tag">No extra storefront signals detected yet</span>'}</div>
@@ -2828,21 +2788,70 @@ function truncateText(value, maxLength = 90) {
 }
 
 function validateFreePlanScope(plan, configuredPages) {
+  if (plan !== "free") {
+    return { allowed: true };
+  }
+
+  const normalizedUrls = configuredPages
+    .map((page) => normalizeAuditUrl(page.url))
+    .filter(Boolean);
+
+  if (!normalizedUrls.length) {
+    return { allowed: true };
+  }
+
+  const storefronts = [...new Set(normalizedUrls.map((item) => item.storefrontKey))];
+  if (storefronts.length > 1) {
+    return {
+      allowed: false,
+      message: "Free plan can analyze only one storefront at a time. Please keep all URLs on the same storefront or switch to Pro."
+    };
+  }
+
+
+  const storefrontKey = storefronts[0];
+  const ledger = getFreePlanUsageLedger();
+  const existingEntry = ledger[storefrontKey];
+
+  if (!existingEntry) {
+    return { allowed: true };
+  }
+
+  const currentSet = [...new Set(normalizedUrls.map((item) => item.pageKey))].sort();
+  const lockedSet = [...new Set(existingEntry.pageKeys || [])].sort();
+  const isSameSet = currentSet.length === lockedSet.length && currentSet.every((value, index) => value === lockedSet[index]);
+
+  if (!isSameSet) {
+    return {
+      allowed: false,
+      message: `Free plan already locked a storefront sample for ${storefrontKey}. You can re-run the same saved sample, but you cannot add new page URLs little by little to audit the full site. Upgrade to Pro to analyze additional pages.`
+    };
+  }
+
   return { allowed: true };
 }
 
 function persistFreePlanScope(configuredPages) {
-  return;
-}
+  const normalizedUrls = configuredPages
+    .map((page) => normalizeAuditUrl(page.url))
+    .filter(Boolean);
 
-function clearLegacyProjectLimits() {
-  try {
-    localStorage.removeItem(FREE_PLAN_USAGE_KEY);
-  } catch (error) {}
-  try {
-    sessionStorage.removeItem(FREE_PLAN_USAGE_KEY);
-  } catch (error) {}
-  setCookie(FREE_PLAN_USAGE_COOKIE, "", -1);
+  if (!normalizedUrls.length) return;
+
+  const storefrontKey = normalizedUrls[0].storefrontKey;
+  const ledger = getFreePlanUsageLedger();
+  const pageKeys = [...new Set(normalizedUrls.map((item) => item.pageKey))].sort();
+  const entry = ledger[storefrontKey] || {
+    storefrontKey,
+    firstLockedAt: new Date().toISOString()
+  };
+
+  entry.pageKeys = pageKeys;
+  entry.lastUsedAt = new Date().toISOString();
+  entry.urlCount = pageKeys.length;
+  ledger[storefrontKey] = entry;
+
+  writeFreePlanUsageLedger(ledger);
 }
 
 function getFreePlanUsageLedger() {

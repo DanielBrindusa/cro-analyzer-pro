@@ -798,6 +798,3 @@ canvas{
   white-space:normal;
   line-height:1.35;
 }
-
-
-#themeProjectName{font-size:clamp(22px,2.4vw,32px);line-height:1.15;word-break:break-word}
