@@ -3,7 +3,8 @@
 const STATE = {
   plan: "free",
   latestReport: null,
-  productRows: 0
+  productRows: 0,
+  progress: null
 };
 
 const PRO_PAYMENT_LINK = "REPLACE_WITH_YOUR_STRIPE_PAYMENT_LINK";
@@ -22,6 +23,7 @@ const MAX_DISCOVERY_SITEMAPS = 6;
 const MAX_DISCOVERY_URLS_FROM_SITEMAP = 400;
 const MAX_DISCOVERY_CANDIDATE_PAGES = 14;
 const RESOURCE_FETCH_CONCURRENCY = 4;
+const ANALYSIS_MAX_RUNTIME_MS = 10 * 60 * 1000;
 const PAGE_FETCH_CACHE = new Map();
 const TEXT_FETCH_CACHE = new Map();
 
@@ -471,8 +473,72 @@ function waitForNextPaint() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
+function formatDuration(ms) {
+  const safe = Math.max(0, Number(ms) || 0);
+  const totalSeconds = Math.ceil(safe / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    const remMinutes = minutes % 60;
+    return `${hours}h ${String(remMinutes).padStart(2, "0")}m`;
+  }
+  if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  return `${seconds}s`;
+}
+
+function buildProgressStatusText(baseStatus) {
+  const meta = STATE.progress;
+  const status = String(baseStatus || "").trim();
+  if (!meta?.startedAt || meta?.done || meta?.failed) return status;
+
+  const elapsed = Date.now() - meta.startedAt;
+  const currentUnits = Math.max(0, Number(meta.currentUnits) || 0);
+  const totalUnits = Math.max(1, Number(meta.totalUnits) || 1);
+  const remainingByCap = Math.max(0, (meta.maxRuntimeMs || ANALYSIS_MAX_RUNTIME_MS) - elapsed);
+  let etaText = "Calculating...";
+
+  if (currentUnits >= 0.5 && elapsed >= 3000) {
+    const unitsPerMs = currentUnits / elapsed;
+    if (unitsPerMs > 0) {
+      const predicted = ((totalUnits - currentUnits) / unitsPerMs);
+      const bounded = Math.max(0, Math.min(predicted, remainingByCap || predicted));
+      etaText = formatDuration(bounded);
+    }
+  }
+
+  const elapsedText = formatDuration(elapsed);
+  const parts = [status];
+  if (meta.phaseLabel) parts.push(`Phase: ${meta.phaseLabel}`);
+  parts.push(`Elapsed: ${elapsedText}`);
+  parts.push(`Estimated time left: ${etaText}`);
+  parts.push(`Max runtime: ${formatDuration(meta.maxRuntimeMs || ANALYSIS_MAX_RUNTIME_MS)}`);
+  return parts.filter(Boolean).join(" • ");
+}
+
+function updateProgressTimerDisplay() {
+  const statusNode = document.getElementById("progressStatus");
+  if (!statusNode) return;
+  const meta = STATE.progress;
+  if (!meta?.baseStatus || meta.done || meta.failed) return;
+  statusNode.textContent = buildProgressStatusText(meta.baseStatus);
+}
+
+function setProgressPhase(phaseLabel) {
+  if (!STATE.progress) return;
+  STATE.progress.phaseLabel = phaseLabel || "";
+  updateProgressTimerDisplay();
+}
+
+function checkAnalysisDeadline(startedAt, maxRuntimeMs = ANALYSIS_MAX_RUNTIME_MS) {
+  if ((Date.now() - startedAt) > maxRuntimeMs) {
+    throw new Error(`Analysis exceeded the maximum runtime of ${formatDuration(maxRuntimeMs)}.`);
+  }
+}
+
 async function runAnalysis() {
   const analyzeButton = document.getElementById("analyzeButton");
+  const discoverButton = document.getElementById("discoverButton");
   const plan = STATE.plan;
   setPlan(plan);
 
@@ -485,6 +551,13 @@ async function runAnalysis() {
   let configuredPages = buildPageTargets();
   const notes = document.getElementById("manualNotes").value.trim();
   const competitorUrl = document.getElementById("competitorUrl")?.value.trim() || "";
+  const homeSeedUrl = document.getElementById("homeUrl")?.value.trim() || configuredPages.find((page) => page.type === "home")?.url || "";
+  const shouldRunDiscovery = !!homeSeedUrl;
+  const estimatedDiscoveryUnits = shouldRunDiscovery ? 12 : 0;
+  const estimatedPageUnits = Math.max(configuredPages.length, 1) * 3.2;
+  const estimatedPostUnits = 4 + (competitorUrl ? 2 : 0);
+  const estimatedTotalUnits = Math.max(estimatedDiscoveryUnits + estimatedPageUnits + estimatedPostUnits, 8);
+  const startedAt = Date.now();
 
   const freePlanGuard = validateFreePlanScope(plan, configuredPages);
   if (!freePlanGuard.allowed) {
@@ -493,28 +566,49 @@ async function runAnalysis() {
   }
 
   analyzeButton.disabled = true;
-  startProgress(Math.max((configuredPages.length || 1) + 4, 5));
-  setProgressValue(4, "Starting analysis...", "Preparing your audit and checking the provided URLs.");
+  if (discoverButton) discoverButton.disabled = true;
+  startProgress(estimatedTotalUnits, { maxRuntimeMs: ANALYSIS_MAX_RUNTIME_MS });
+  setProgressPhase(shouldRunDiscovery ? "Discovery" : "Analysis");
+  updateProgress(0.3, estimatedTotalUnits, shouldRunDiscovery
+    ? "Starting URL discovery and preparing the CRO analysis..."
+    : "Preparing your audit and checking the provided URLs...");
   await waitForNextPaint();
 
-  const homeSeedUrl = document.getElementById("homeUrl")?.value.trim() || configuredPages.find((page) => page.type === "home")?.url || "";
-  if (homeSeedUrl && (!configuredPages.some((page) => page.type === "category") || !configuredPages.some((page) => page.type === "product"))) {
-    updateProgress(0.4, Math.max((configuredPages.length || 1) + 4, 5), "Scanning the homepage for category and product URLs...");
-    await waitForNextPaint();
-    const discovered = await discoverUrlsAdvanced(homeSeedUrl, (message) => {
-      updateProgress(0.55, Math.max((configuredPages.length || 1) + 4, 5), message);
-    });
-    if ((discovered.categories || []).length || (discovered.products || []).length) {
+  try {
+    if (shouldRunDiscovery) {
+      renderDiscoveredUrls({
+        categories: STATE.discovered?.categories || [],
+        products: STATE.discovered?.products || [],
+        status: "Starting URL discovery...",
+        notes: ["The app is discovering URLs first, then it will continue automatically into the CRO analysis."]
+      });
+      const discoveryBase = 0.6;
+      const discoverySpan = estimatedDiscoveryUnits;
+      const discovered = await discoverUrlsAdvanced(homeSeedUrl, (payload) => {
+        const info = typeof payload === "string" ? { message: payload } : (payload || {});
+        const step = Number(info.step) || 0;
+        const totalSteps = Math.max(Number(info.totalSteps) || 1, 1);
+        const message = info.message || "Discovering URLs...";
+        setProgressPhase("Discovery");
+        updateProgress(discoveryBase + ((step / totalSteps) * discoverySpan), estimatedTotalUnits, message);
+        if (info.notes || info.preview) {
+          renderDiscoveredUrls({
+            categories: info.preview?.categories || STATE.discovered?.categories || [],
+            products: info.preview?.products || STATE.discovered?.products || [],
+            status: message,
+            notes: info.notes || ["The app is still scanning the store structure."]
+          });
+        }
+      });
+      checkAnalysisDeadline(startedAt);
       STATE.discovered = discovered;
-      renderDiscoveredUrls(STATE.discovered);
-      autoFillDiscoveredUrls(STATE.discovered, plan);
+      renderDiscoveredUrls(discovered);
+      autoFillDiscoveredUrls(discovered, plan);
       configuredPages = buildPageTargets();
-      updateProgress(0.8, Math.max((configuredPages.length || 1) + 4, 5), "Suggested URLs found. Preparing the full analysis...");
+      updateProgress(discoveryBase + discoverySpan, estimatedTotalUnits, "URL discovery finished. Preparing the full CRO analysis...");
       await waitForNextPaint();
     }
-  }
 
-  try {
     const relevantChecklist = window.CRO_CHECKLIST.filter((item) => plan === "pro" || item.tier === "basic");
     const pageResults = [];
     const recommendations = [];
@@ -525,18 +619,26 @@ async function runAnalysis() {
     let stackSummary = null;
     let homePageSpeed = null;
     let competitorReport = null;
+    let progressUnits = shouldRunDiscovery ? estimatedDiscoveryUnits + 1 : 1;
+    const analysisTotalUnits = Math.max(estimatedTotalUnits, progressUnits + (Math.max(configuredPages.length, 1) * 3.2) + estimatedPostUnits);
 
     if (!configuredPages.length) {
-      updateProgress(1, 1, "No page URLs were provided. Building a manual CRO review report...");
+      setProgressPhase("Analysis");
+      updateProgress(progressUnits, analysisTotalUnits, "No page URLs were provided. Building a manual CRO review report...");
       await wait(350);
+      progressUnits += 0.5;
     }
 
     for (let index = 0; index < configuredPages.length; index += 1) {
+      checkAnalysisDeadline(startedAt);
       const target = configuredPages[index];
-      updateProgress(index, configuredPages.length, `Fetching ${target.label}...`);
+      setProgressPhase(`Analysis • ${target.label}`);
+      updateProgress(progressUnits, analysisTotalUnits, `Fetching ${target.label}...`);
       const fetchResult = await fetchPageHtml(target.url);
       fetchResult.url = target.url;
-      updateProgress(index + 0.5, configuredPages.length, `Scoring ${target.label}...`);
+
+      progressUnits += 1.1;
+      updateProgress(progressUnits, analysisTotalUnits, `Scoring ${target.label}...`);
       const pageAnalysis = await analyzePage(target.type, fetchResult, plan);
 
       pageResults.push({
@@ -546,7 +648,8 @@ async function runAnalysis() {
 
       if (target.type === "home" && pageAnalysis.stack) {
         stackSummary = pageAnalysis.stack;
-        updateProgress(index + 0.75, configuredPages.length + 2, "Checking homepage performance signals...");
+        progressUnits += 0.45;
+        updateProgress(progressUnits, analysisTotalUnits, "Checking homepage performance signals...");
         homePageSpeed = await fetchPageSpeedScore(target.url);
       }
 
@@ -564,11 +667,15 @@ async function runAnalysis() {
         });
       });
 
-      updateProgress(index + 1, configuredPages.length, `${target.label} analyzed.`);
-      await wait(150);
+      progressUnits += 1.35;
+      updateProgress(progressUnits, analysisTotalUnits, `${target.label} analyzed.`);
+      await wait(120);
     }
 
-    updateProgress(configuredPages.length || 1, configuredPages.length || 1, "Compiling CRO recommendations...");
+    checkAnalysisDeadline(startedAt);
+    setProgressPhase("Recommendations");
+    progressUnits += 0.6;
+    updateProgress(progressUnits, analysisTotalUnits, "Compiling CRO recommendations...");
     const manualChecklist = relevantChecklist.filter((item) => {
       if (item.page === "general") return true;
       if (item.page === "product") return configuredPages.some((p) => p.type === "product");
@@ -587,8 +694,12 @@ async function runAnalysis() {
     const topRecommendations = cleanedRecommendations.slice(0, recommendationLimit);
 
     if (competitorUrl) {
-      updateProgress((configuredPages.length || 1) + 1, (configuredPages.length || 1) + 2, "Benchmarking competitor signals...");
+      checkAnalysisDeadline(startedAt);
+      setProgressPhase("Competitor benchmark");
+      progressUnits += 0.8;
+      updateProgress(progressUnits, analysisTotalUnits, "Benchmarking competitor signals...");
       competitorReport = await analyzeCompetitor(competitorUrl, plan);
+      progressUnits += 1.2;
     }
 
     if (plan === "free") {
@@ -602,8 +713,6 @@ async function runAnalysis() {
       projectName,
       plan,
       notes,
-      
-      
       overallScore,
       checksUsed: totalChecks,
       pagesAnalyzed: configuredPages.length,
@@ -620,6 +729,10 @@ async function runAnalysis() {
       inspectionSummary: buildInspectionSummary(pageResults)
     };
 
+    setProgressPhase("Finalizing report");
+    progressUnits = Math.min(analysisTotalUnits - 0.25, progressUnits + 0.8);
+    updateProgress(progressUnits, analysisTotalUnits, "Finalizing the CRO report and saving it locally...");
+
     hydrateReportLinks(report);
     STATE.latestReport = report;
     saveReport(report);
@@ -627,12 +740,17 @@ async function runAnalysis() {
     renderSavedReports();
     completeProgress(`Analysis complete. ${report.pagesAnalyzed} page${report.pagesAnalyzed === 1 ? "" : "s"} processed.`);
   } catch (error) {
-    failProgress("The analysis stopped unexpectedly. Please try again.");
+    const timeoutHit = String(error?.message || "").includes("maximum runtime") || String(error?.message || "").includes("exceeded the maximum runtime");
+    failProgress(timeoutHit
+      ? `The analysis reached the ${formatDuration(ANALYSIS_MAX_RUNTIME_MS)} time limit before finishing. Try fewer pages or rerun the audit.`
+      : "The analysis stopped unexpectedly. Please try again.");
     console.error(error);
   } finally {
     analyzeButton.disabled = false;
+    if (discoverButton) discoverButton.disabled = false;
   }
 }
+
 
 
 
@@ -653,21 +771,45 @@ function revealAnalysisProgress() {
   panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-function startProgress(totalSteps) {
+function startProgress(totalSteps, options = {}) {
   const panel = document.getElementById("analysisProgress");
   panel.classList.remove("hidden");
+  STATE.progress = {
+    startedAt: Date.now(),
+    totalUnits: Math.max(Number(totalSteps) || 1, 1),
+    currentUnits: 0,
+    baseStatus: "The app is getting your audit ready.",
+    phaseLabel: "Preparing",
+    maxRuntimeMs: options.maxRuntimeMs || ANALYSIS_MAX_RUNTIME_MS,
+    timerId: null,
+    done: false,
+    failed: false
+  };
   setProgressValue(3, "Preparing analysis...", "The app is getting your audit ready.");
   panel.dataset.totalSteps = String(Math.max(totalSteps, 1));
+  if (STATE.progress.timerId) clearInterval(STATE.progress.timerId);
+  STATE.progress.timerId = setInterval(updateProgressTimerDisplay, 1000);
   revealAnalysisProgress();
 }
 
 function updateProgress(completedSteps, totalSteps, statusText) {
   const safeTotal = Math.max(totalSteps, 1);
   const ratio = Math.max(0.08, Math.min(completedSteps / safeTotal, 0.94));
+  if (STATE.progress) {
+    STATE.progress.totalUnits = safeTotal;
+    STATE.progress.currentUnits = Math.max(0, completedSteps);
+    STATE.progress.baseStatus = statusText;
+  }
   setProgressValue(Math.round(ratio * 100), "Running analysis...", statusText);
 }
 
 function completeProgress(statusText) {
+  if (STATE.progress?.timerId) clearInterval(STATE.progress.timerId);
+  if (STATE.progress) {
+    STATE.progress.done = true;
+    STATE.progress.currentUnits = STATE.progress.totalUnits;
+    STATE.progress.baseStatus = statusText;
+  }
   setProgressValue(100, "Analysis complete", statusText);
   revealAnalysisProgress();
 }
@@ -676,6 +818,11 @@ function failProgress(statusText) {
   const title = document.getElementById("progressTitle");
   title.textContent = "Analysis failed";
   title.classList.add("progress-error");
+  if (STATE.progress?.timerId) clearInterval(STATE.progress.timerId);
+  if (STATE.progress) {
+    STATE.progress.failed = true;
+    STATE.progress.baseStatus = statusText;
+  }
   setProgressValue(100, "Analysis failed", statusText);
   revealAnalysisProgress();
 }
@@ -691,7 +838,7 @@ function setProgressValue(percent, titleText, statusText) {
   title.textContent = titleText;
   title.classList.remove("progress-error");
   percentLabel.textContent = `${clamped}%`;
-  status.textContent = statusText;
+  status.textContent = buildProgressStatusText(statusText);
   fill.style.width = `${clamped}%`;
   track.setAttribute("aria-valuenow", String(clamped));
 }
@@ -1148,17 +1295,31 @@ async function inspectCandidateUrl(url) {
 async function discoverUrlsAdvanced(homeUrl, setStatus = () => {}) {
   const discovered = createEmptyDiscoveryResult(homeUrl);
   const notes = discovered.notes;
-  const setStep = (message) => {
+  const totalSteps = 5;
+  const setStep = (step, message, extra = {}) => {
     discovered.status = message;
-    setStatus(message);
+    setStatus({
+      step,
+      totalSteps,
+      message,
+      notes: extra.notes,
+      preview: extra.preview
+    });
   };
 
-  setStep("Fetching the home page to discover internal URLs...");
+  setStep(1, "Fetching the home page to discover internal URLs...");
   const homeFetch = await fetchPageHtml(homeUrl);
   if (!homeFetch.ok) {
     notes.push("The home page could not be fetched automatically. This usually happens because the site blocks browser fetch requests or uses heavy client-side rendering.");
     discovered.source = "blocked";
     discovered.status = "Automatic discovery could not access the home page.";
+    setStep(5, discovered.status, {
+      notes: discovered.notes,
+      preview: {
+        categories: discovered.categories,
+        products: discovered.products
+      }
+    });
     return discovered;
   }
 
@@ -1179,7 +1340,7 @@ async function discoverUrlsAdvanced(homeUrl, setStatus = () => {}) {
     notes.push(`Home page scan found ${discovered.debug.homepageLinksParsed} same-domain links, but none matched the current product/category rules.`);
   }
 
-  setStep("Checking robots.txt and sitemap files for more URLs...");
+  setStep(2, "Checking robots.txt and sitemap files for more URLs...");
   let sitemapQueue = [normalizeDiscoveredUrl("/sitemap.xml", homeUrl), normalizeDiscoveredUrl("/sitemap_index.xml", homeUrl)].filter(Boolean);
   const robotsUrl = normalizeDiscoveredUrl("/robots.txt", homeUrl);
   if (robotsUrl) {
@@ -1221,11 +1382,18 @@ async function discoverUrlsAdvanced(homeUrl, setStatus = () => {}) {
     products: [...new Set(discoveredFromSitemaps.products)]
   });
 
+  setStep(3, "Classifying discovered URLs and validating likely page types...", {
+    preview: {
+      categories: discovered.categories,
+      products: discovered.products
+    }
+  });
+
   if (discovered.debug.sitemapUrlsParsed) notes.push(`Sitemaps contributed ${discovered.debug.sitemapUrlsParsed} URLs for classification.`);
   else notes.push("No usable sitemap URLs were available.");
 
   if ((!discovered.categories.length || !discovered.products.length) && discovered.debug.homepageLinksParsed) {
-    setStep("Inspecting likely internal pages to confirm product and category patterns...");
+    setStep(4, "Inspecting likely internal pages to confirm product and category patterns...");
     const candidateUrls = [...new Set(
       [...homeDoc.querySelectorAll('a[href]')]
         .map((a) => normalizeDiscoveredUrl(a.getAttribute("href"), homeUrl))
@@ -1257,6 +1425,14 @@ async function discoverUrlsAdvanced(homeUrl, setStatus = () => {}) {
     discovered.status = "Discovery completed, but no category or product URLs could be confirmed automatically.";
     notes.push("Some stores hide important links behind JavaScript menus or use custom URL structures, so manual URLs may still be needed.");
   }
+
+  setStep(5, discovered.status, {
+    notes: discovered.notes,
+    preview: {
+      categories: discovered.categories,
+      products: discovered.products
+    }
+  });
 
   return discovered;
 }
@@ -1338,12 +1514,13 @@ async function discoverUrlsOnly() {
   });
 
   try {
-    const discovered = await discoverUrlsAdvanced(homeUrl, (message) => {
+    const discovered = await discoverUrlsAdvanced(homeUrl, (payload) => {
+      const info = typeof payload === "string" ? { message: payload } : (payload || {});
       renderDiscoveredUrls({
-        categories: [],
-        products: [],
-        status: message,
-        notes: ["The app is still working. This can take a little longer on larger stores."]
+        categories: info.preview?.categories || [],
+        products: info.preview?.products || [],
+        status: info.message || "Discovering URLs...",
+        notes: info.notes || ["The app is still working. This can take a little longer on larger stores."]
       });
     });
     STATE.discovered = discovered;
