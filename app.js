@@ -650,7 +650,7 @@ async function runAnalysis() {
         stackSummary = pageAnalysis.stack;
         progressUnits += 0.45;
         updateProgress(progressUnits, analysisTotalUnits, "Checking homepage performance signals...");
-        homePageSpeed = await fetchPageSpeedScore(target.url);
+        homePageSpeed = await fetchPageSpeedScore(target.url, pageAnalysis, fetchResult);
       }
 
       totalChecks += pageAnalysis.appliedChecks.length;
@@ -902,10 +902,12 @@ async function fetchPageHtml(url) {
       const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
       try {
+        const startedAt = (typeof performance !== "undefined" && typeof performance.now === "function") ? performance.now() : Date.now();
         const response = await fetch(attempt.url, { method: "GET", signal: controller.signal });
         clearTimeout(timeoutId);
         if (!response.ok) continue;
         const text = await response.text();
+        const endedAt = (typeof performance !== "undefined" && typeof performance.now === "function") ? performance.now() : Date.now();
         const normalized = normalizeFetchedPageMarkup(text, attempt.type, normalizedUrl, response.headers.get("content-type") || "");
         if (normalized.html && normalized.html.length > 120) {
           return {
@@ -916,7 +918,12 @@ async function fetchPageHtml(url) {
             mode: normalized.mode,
             contentType: response.headers.get("content-type") || "",
             url: normalizedUrl,
-            finalUrl: response.url || normalizedUrl
+            finalUrl: response.url || normalizedUrl,
+            fetchMetrics: {
+              durationMs: Math.max(1, Math.round(endedAt - startedAt)),
+              transferBytes: text.length,
+              fetchedVia: attempt.type
+            }
           };
         }
       } catch (error) {
@@ -932,7 +939,8 @@ async function fetchPageHtml(url) {
       mode: "none",
       contentType: "",
       url: normalizedUrl,
-      finalUrl: normalizedUrl
+      finalUrl: normalizedUrl,
+      fetchMetrics: null
     };
   })();
 
@@ -992,26 +1000,83 @@ function stripHtmlToText(html) {
     .trim();
 }
 
-async function fetchPageSpeedScore(url) {
+async function fetchPageSpeedScore(url, pageAnalysis = null, fetchResult = null) {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), SPEED_TIMEOUT_MS);
     const endpoint = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?strategy=mobile&url=${encodeURIComponent(url)}`;
     const response = await fetch(endpoint, { signal: controller.signal });
     clearTimeout(timeoutId);
-    if (!response.ok) return null;
 
-    const data = await response.json();
-    const score = data?.lighthouseResult?.categories?.performance?.score;
-    if (typeof score !== "number") return null;
-
-    return {
-      score: Math.round(score * 100),
-      source: "Google PageSpeed"
-    };
+    if (response.ok) {
+      const data = await response.json();
+      const score = data?.lighthouseResult?.categories?.performance?.score;
+      if (typeof score === "number") {
+        return {
+          score: Math.round(score * 100),
+          source: "Google PageSpeed",
+          method: "lab",
+          strategy: "mobile"
+        };
+      }
+    }
   } catch (error) {
-    return null;
+    // Fall back to an on-the-fly estimate below.
   }
+
+  return estimateHomePageSpeedFromAvailableSignals(url, pageAnalysis, fetchResult);
+}
+
+function estimateHomePageSpeedFromAvailableSignals(url, pageAnalysis = null, fetchResult = null) {
+  const fetchDuration = Number(fetchResult?.fetchMetrics?.durationMs) || null;
+  const transferBytes = Number(fetchResult?.fetchMetrics?.transferBytes) || fetchResult?.html?.length || 0;
+  const assetCount = Number(pageAnalysis?.resourceSummary?.assetCount) || 0;
+  const inlineCount = Number(pageAnalysis?.resourceSummary?.inlineCount) || 0;
+  const imageCount = Number(pageAnalysis?.domStats?.images) || 0;
+  const scriptCount = Number(pageAnalysis?.resources?.scripts?.length) || 0;
+  const cssCount = Number(pageAnalysis?.resources?.css?.length) || 0;
+  const fetchMode = fetchResult?.mode || pageAnalysis?.fetchMode || "unknown";
+
+  const hasEnoughSignals = fetchDuration != null || transferBytes > 0 || assetCount > 0 || imageCount > 0;
+  if (!hasEnoughSignals) return null;
+
+  let score = 100;
+
+  if (fetchDuration != null) {
+    if (fetchDuration <= 700) score -= 0;
+    else if (fetchDuration <= 1200) score -= 8;
+    else if (fetchDuration <= 1800) score -= 16;
+    else if (fetchDuration <= 2500) score -= 24;
+    else if (fetchDuration <= 3500) score -= 36;
+    else if (fetchDuration <= 5000) score -= 48;
+    else if (fetchDuration <= 8000) score -= 62;
+    else score -= 74;
+  } else {
+    score -= 22;
+  }
+
+  score -= Math.min(18, Math.round(transferBytes / 50000));
+  score -= Math.min(16, Math.max(0, assetCount - 6));
+  score -= Math.min(10, Math.max(0, imageCount - 10));
+  score -= Math.min(8, Math.max(0, (scriptCount + cssCount) - 8));
+  score -= Math.min(6, Math.max(0, inlineCount - 6));
+
+  if (fetchMode === "text-proxy") score -= 6;
+  if (fetchResult?.source && fetchResult.source !== "direct") score -= 4;
+
+  const normalizedScore = Math.max(8, Math.min(96, Math.round(score)));
+  const detailParts = [];
+  if (fetchDuration != null) detailParts.push(`${fetchDuration} ms homepage fetch`);
+  if (assetCount) detailParts.push(`${assetCount} linked assets`);
+  if (imageCount) detailParts.push(`${imageCount} images detected`);
+
+  return {
+    score: normalizedScore,
+    source: "Estimated homepage speed",
+    method: "estimated-fetch",
+    strategy: "homepage",
+    detail: detailParts.join(" · ") || shortDisplayUrl(url)
+  };
 }
 
 function getScreenshotUrl(url, provider = "primary") {
@@ -1462,7 +1527,7 @@ async function analyzeCompetitor(url, plan) {
   const general = await analyzePage("general", fetchResult, plan);
   const totalWeight = home.totalWeight + general.totalWeight;
   const scoreWeight = home.scoreWeight + general.scoreWeight;
-  const speed = await fetchPageSpeedScore(url);
+  const speed = await fetchPageSpeedScore(url, home, fetchResult);
   return {
     url,
     fetched: fetchResult.ok,
@@ -1683,8 +1748,12 @@ function renderHomeSpeedMetric(homePageSpeed) {
   speedCard.classList.add(getSpeedClass(score));
 
   scoreElement.textContent = score != null ? `${score}/100` : "Unavailable";
+  const sourceLabel = homePageSpeed?.source || "Homepage speed";
+  const methodDetail = homePageSpeed?.method === "estimated-fetch"
+    ? (homePageSpeed?.detail || "Estimated from homepage fetch timing and page weight signals")
+    : "Google PageSpeed mobile score";
   labelElement.textContent = score != null
-    ? `${getSpeedMessage(score)} · Google PageSpeed mobile score`
+    ? `${getSpeedMessage(score)} · ${sourceLabel} · ${methodDetail}`
     : getSpeedMessage(score);
 
   let gauge = speedCard.querySelector(".speed-meter");
