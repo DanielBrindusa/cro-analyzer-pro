@@ -738,38 +738,3 @@ canvas{
     text-align:center;
   }
 }
-.discovery-status{font-weight:700;margin-bottom:6px;color:#f5f7ff}
-.discovery-summary{font-size:.92rem;color:#c7d4ff;margin-bottom:8px}
-.discovery-notes{display:grid;gap:6px;margin-bottom:10px}
-.discovery-notes p{margin:0;color:#dce5ff}
-.discovery-chip-grid{display:flex;flex-wrap:wrap;gap:8px}
-
-
-/* Discovered URLs wrapping fix */
-.discovery-list,
-.discovery-chip-grid{
-  min-width: 0;
-}
-
-.discovery-chip-grid{
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-}
-
-.discovery-chip{
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  display: block;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  white-space: normal;
-  line-height: 1.5;
-}
-
-@media (min-width: 1100px){
-  .discovery-chip-grid{
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
