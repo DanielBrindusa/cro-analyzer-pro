@@ -13,7 +13,6 @@ const SPEED_TIMEOUT_MS = 12000;
 
 const FREE_PLAN_USAGE_KEY = "croFreePlanUsageLedger";
 const FREE_PLAN_USAGE_COOKIE = "croFreePlanUsageLedger";
-const FREE_PLAN_MAX_URLS_PER_STOREFRONT = 8;
 const MULTI_PART_TLDS = [
   "co.uk", "org.uk", "gov.uk", "ac.uk",
   "com.au", "net.au", "org.au",
@@ -398,10 +397,6 @@ function startProPayment() {
 }
 
 function addCategoryRow(value = "") {
-  if (STATE.plan === "free" && getCategoryInputs().length >= 1) {
-    alert("Free plan allows 1 category / collection URL.");
-    return;
-  }
   const list = document.getElementById("categoryUrlList");
   if (!list) return;
   const row = document.createElement("div");
@@ -425,18 +420,10 @@ function getCategoryInputs() {
 function enforceCategoryLimit() {
   const addButton = document.getElementById("addCategoryUrl");
   if (!addButton) return;
-  const rows = getCategoryInputs();
-  if (STATE.plan === "free" && rows.length > 1) {
-    rows.slice(1).forEach((input) => input.closest(".product-url-row").remove());
-  }
-  addButton.disabled = STATE.plan === "free" && getCategoryInputs().length >= 1;
+  addButton.disabled = false;
 }
 
 function addProductRow(value = "") {
-  if (STATE.plan === "free" && getProductInputs().length >= 5) {
-    alert("Free plan allows up to 5 product URLs.");
-    return;
-  }
   ensureDynamicUrlLists();
   const list = document.getElementById("productUrlList");
   if (!list) return;
@@ -457,11 +444,8 @@ function addProductRow(value = "") {
 
 function enforceProductLimit() {
   const addButton = document.getElementById("addProductUrl");
-  const rows = getProductInputs();
-  if (STATE.plan === "free" && rows.length > 5) {
-    rows.slice(5).forEach((input) => input.closest(".product-url-row").remove());
-  }
-  addButton.disabled = STATE.plan === "free" && getProductInputs().length >= 5;
+  if (!addButton) return;
+  addButton.disabled = false;
 }
 
 function getProductInputs() {
@@ -1414,12 +1398,6 @@ function validateFreePlanScope(plan, configuredPages) {
     };
   }
 
-  if (normalizedUrls.length > FREE_PLAN_MAX_URLS_PER_STOREFRONT) {
-    return {
-      allowed: false,
-      message: `Free plan allows one fixed storefront sample of up to ${FREE_PLAN_MAX_URLS_PER_STOREFRONT} unique URLs per storefront.`
-    };
-  }
 
   const storefrontKey = storefronts[0];
   const ledger = getFreePlanUsageLedger();
