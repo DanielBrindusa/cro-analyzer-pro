@@ -451,22 +451,22 @@ canvas{
   transition:all .3s ease;
 }
 
-.speed-good{
+.speed-gauge.speed-good{
   background:linear-gradient(90deg,#39d98a,#2ecc71);
   box-shadow:0 0 12px rgba(57,217,138,.6);
 }
 
-.speed-medium{
+.speed-gauge.speed-medium{
   background:linear-gradient(90deg,#f6c760,#f39c12);
   box-shadow:0 0 12px rgba(246,199,96,.6);
 }
 
-.speed-bad{
+.speed-gauge.speed-bad{
   background:linear-gradient(90deg,#ff6b6b,#e74c3c);
   box-shadow:0 0 12px rgba(255,107,107,.6);
 }
 
-.speed-unknown{
+.speed-gauge.speed-unknown{
   background:rgba(255,255,255,.08);
 }
 
