@@ -2522,15 +2522,26 @@ function buildInitialRequiredChecks(pageResults) {
     aboutPage: { passed: false, evidence: "No About Us signal found yet.", locations: [] }
   };
 
+  let bestFaqMatch = null;
+
   pageResults.forEach((page) => {
     const signals = page.pageSignals || {};
     const location = { url: page.url, label: page.label };
     if (signals.contactPage && !output.contactPage.passed) output.contactPage = { passed: true, evidence: signals.contactPageEvidence, locations: [location] };
     if (signals.contactDetails && !output.contactDetails.passed) output.contactDetails = { passed: true, evidence: signals.contactDetailsEvidence, locations: [location] };
     if (signals.contactForm && !output.contactForm.passed) output.contactForm = { passed: true, evidence: signals.contactFormEvidence, locations: [location] };
-    if (signals.faqPageOrSection && !output.faqPageOrSection.passed) output.faqPageOrSection = { passed: true, evidence: signals.faqEvidence, locations: [location] };
     if (signals.aboutPage && !output.aboutPage.passed) output.aboutPage = { passed: true, evidence: signals.aboutEvidence, locations: [location] };
+    if (signals.faqPageOrSection) {
+      const score = Number(signals.faqConfidenceScore || 0);
+      if (!bestFaqMatch || score > bestFaqMatch.score) {
+        bestFaqMatch = { score, evidence: signals.faqEvidence, location };
+      }
+    }
   });
+
+  if (bestFaqMatch) {
+    output.faqPageOrSection = { passed: true, evidence: bestFaqMatch.evidence, locations: [bestFaqMatch.location] };
+  }
 
   return output;
 }
@@ -2562,12 +2573,35 @@ function countRegexMatches(value, regex) {
   return matches ? matches.length : 0;
 }
 
+function extractScopedText(root) {
+  if (!root) return "";
+  const clone = root.cloneNode(true);
+  clone.querySelectorAll('script, style, noscript, template, svg, iframe').forEach((node) => node.remove());
+  return (clone.innerText || clone.textContent || "").replace(/\s+/g, " ").trim();
+}
+
+function extractPrimaryContentText(doc) {
+  const body = doc?.body;
+  if (!body) return "";
+  const clone = body.cloneNode(true);
+  clone.querySelectorAll('header, nav, footer, [role="banner"], [role="navigation"], [role="contentinfo"], .site-header, .header, .main-header, .site-footer, .footer, .main-footer, .announcement-bar, .top-bar, .utility-bar, .breadcrumb, .breadcrumbs').forEach((node) => node.remove());
+  return extractScopedText(clone);
+}
+
 function buildRequiredElementSignals(context) {
   const pageUrl = String(context?.url || "");
+  const pathname = (() => {
+    try {
+      return new URL(pageUrl).pathname.toLowerCase();
+    } catch (error) {
+      return String(pageUrl || "").toLowerCase();
+    }
+  })();
   const title = `${context?.title || ""} ${context?.metaDescription || ""} ${context?.ogTitle || ""} ${context?.ogDescription || ""}`.toLowerCase();
   const text = String(context?.signalText || "");
+  const primaryText = String(context?.primaryContentText || "").toLowerCase();
   const rawText = `${title} ${text}`;
-  const linkText = (context?.pageLinks || []).map((link) => `${link.text || ""} ${link.url || ""}`).join(" ").toLowerCase();
+  const rawPrimaryText = `${title} ${primaryText}`;
   const hasMailto = /mailto:/i.test(rawText);
   const hasTel = /tel:/i.test(rawText);
   const hasEmail = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(rawText);
@@ -2580,17 +2614,39 @@ function buildRequiredElementSignals(context) {
   const contactForm = formCount > 0
     && ((context?.domStats?.textareaCount || 0) > 0 || (context?.domStats?.emailInputs || 0) > 0)
     && (dedicatedContactPage || contactIntentText);
-  const faqHeadingCount = countRegexMatches(rawText, /(?:^|\n|\r|\s)(faq|frequently asked questions|common questions)(?:\s|$)/gi);
+
+  const faqHeadingCount = countRegexMatches(rawPrimaryText, /(?:^|\n|\r|\s)(faq|frequently asked questions|common questions)(?:\s|$)/gi);
   const questionLikePattern = /(how|what|when|where|why|do|does|can|is|are|will|should)\s+[^.?!]{6,}\?/gi;
-  const questionLikeCount = countRegexMatches(text, questionLikePattern);
+  const questionLikeCount = countRegexMatches(primaryText, questionLikePattern);
   const accordionCount = context?.domStats?.accordions || 0;
-  const faqSectionOnPage = !!context?.domStats?.faqBlocks
-    || hasStructuredDataType(context, "FAQPage", "Question")
+  const faqNamedBlockCount = context?.domStats?.faqNamedBlocks || 0;
+  const faqQuestionBlockCount = context?.domStats?.faqQuestionBlocks || 0;
+  const hasFaqSchema = hasStructuredDataType(context, "FAQPage", "Question");
+  const isHomeLikePath = pathname === "/" || pathname === "" || /^\/(home|index(?:\.html?)?)$/i.test(pathname);
+  const dedicatedFaqPage = /\/faq(?:[-/]|$)|\/faqs(?:[-/]|$)|\/help-center(?:[-/]|$)|\/frequently-asked(?:[-/]|$)|\/questions(?:[-/]|$)/i.test(pathname)
+    || ((/\bfaq\b|frequently asked questions|common questions/i.test(title) || faqNamedBlockCount >= 2) && !isHomeLikePath);
+  let faqSectionOnPage = hasFaqSchema
+    || faqQuestionBlockCount >= 2
+    || (faqNamedBlockCount >= 1 && questionLikeCount >= 1)
     || (faqHeadingCount >= 1 && questionLikeCount >= 2)
-    || (faqHeadingCount >= 1 && accordionCount >= 2);
-  const dedicatedFaqPage = /\/faq(?:[-/]|$)|\/faqs(?:[-/]|$)|\/help-center(?:[-/]|$)|\/frequently-asked(?:[-/]|$)/i.test(pageUrl)
-    || (/\bfaq\b|frequently asked questions|common questions/i.test(title) && !/home|welcome|index/i.test(title));
+    || (faqHeadingCount >= 1 && accordionCount >= 2 && questionLikeCount >= 1);
+
+  if (isHomeLikePath && !dedicatedFaqPage && !hasFaqSchema && faqNamedBlockCount === 0 && faqQuestionBlockCount < 2) {
+    faqSectionOnPage = faqHeadingCount >= 1 && questionLikeCount >= 3;
+  }
+
   const faqPageOrSection = faqSectionOnPage || dedicatedFaqPage;
+  const faqConfidenceScore = faqPageOrSection
+    ? Math.max(1,
+        (dedicatedFaqPage ? 100 : 0)
+        + (hasFaqSchema ? 80 : 0)
+        + Math.min(30, faqNamedBlockCount * 12)
+        + Math.min(24, faqQuestionBlockCount * 10)
+        + Math.min(20, faqHeadingCount * 8)
+        + Math.min(20, questionLikeCount * 4)
+        + (isHomeLikePath && !dedicatedFaqPage ? -35 : 0)
+      )
+    : 0;
   const aboutPage = /\/about(?:[-/]|$)|\/our-story(?:[-/]|$)|\/about-us(?:[-/]|$)/i.test(pageUrl)
     || /\babout us\b|\bour story\b|\bour mission\b|\bwho we are\b/.test(title);
 
@@ -2608,12 +2664,13 @@ function buildRequiredElementSignals(context) {
       ? `Detected a likely contact form with ${formCount} form${formCount === 1 ? "" : "s"} and contact-related fields or wording.`
       : "No dedicated contact form was detected.",
     faqPageOrSection,
+    faqConfidenceScore,
     faqEvidence: faqPageOrSection
       ? (dedicatedFaqPage
           ? `Detected a likely dedicated FAQ page at ${shortDisplayUrl(pageUrl)}.`
-          : hasStructuredDataType(context, "FAQPage", "Question")
+          : hasFaqSchema
             ? "Detected FAQ schema or question markup in the inspected page."
-            : "Detected a likely on-page FAQ section based on headings, questions, or accordion-style content.")
+            : "Detected a likely on-page FAQ section based on headings, repeated customer questions, or FAQ-style accordions.")
       : "No FAQ page or FAQ section was detected.",
     aboutPage,
     aboutEvidence: aboutPage
@@ -2809,6 +2866,7 @@ async function buildAnalysisContext(doc, html, pageUrl) {
   const ogDescription = (doc.querySelector('meta[property="og:description"], meta[name="twitter:description"]')?.getAttribute("content") || "").trim();
   const canonicalUrl = (doc.querySelector('link[rel="canonical"]')?.getAttribute("href") || "").trim();
   const bodyText = ((doc.body?.innerText || stripHtmlToText(html) || "").replace(/\s+/g, " ").trim());
+  const primaryContentText = extractPrimaryContentText(doc);
   const headingText = [...doc.querySelectorAll("h1, h2, h3")].map((el) => el.textContent.trim()).filter(Boolean).slice(0, 30).join(" ");
   const buttonText = [...doc.querySelectorAll('button, [role="button"], a, summary')].map((el) => el.textContent.trim()).filter(Boolean).slice(0, 60).join(" ");
   const altText = [...doc.querySelectorAll("img[alt]")].map((el) => el.getAttribute("alt")?.trim()).filter(Boolean).slice(0, 40).join(" ");
@@ -2911,6 +2969,7 @@ async function buildAnalysisContext(doc, html, pageUrl) {
     ogDescription,
     canonicalUrl,
     signalText,
+    primaryContentText,
     structuredData,
     resources: linkedResources,
     resourceSummary: {
@@ -3107,6 +3166,8 @@ async function mapWithConcurrency(items, limit, worker) {
 function collectDomStats(doc, structuredData) {
   const allInteractive = [...doc.querySelectorAll('button, a[href], [role="button"], input, select, textarea')];
   const visibleText = (doc.body?.innerText || "").replace(/\s+/g, ' ').trim();
+  const faqNamedBlockCount = doc.querySelectorAll('[class*="faq" i], [id*="faq" i], [aria-label*="faq" i], [data-testid*="faq" i]').length;
+  const faqQuestionBlockCount = [...doc.querySelectorAll('details, summary, [class*="accordion" i], [class*="question" i], [id*="question" i]')].filter((el) => /faq|frequently asked questions|common questions|\?/.test((el.textContent || '').toLowerCase())).length;
   return {
     headings: doc.querySelectorAll('h1, h2, h3').length,
     h1Count: doc.querySelectorAll('h1').length,
@@ -3121,7 +3182,9 @@ function collectDomStats(doc, structuredData) {
     videos: doc.querySelectorAll('video, iframe[src*="youtube" i], iframe[src*="vimeo" i]').length,
     accordions: doc.querySelectorAll('details, summary, [aria-expanded]').length,
     reviewWidgets: doc.querySelectorAll('[class*="review" i], [data-rating], [itemprop="review"], [itemprop="aggregateRating"]').length,
-    faqBlocks: doc.querySelectorAll('[class*="faq" i], [id*="faq" i], details').length,
+    faqBlocks: faqNamedBlockCount + faqQuestionBlockCount,
+    faqNamedBlocks: faqNamedBlockCount,
+    faqQuestionBlocks: faqQuestionBlockCount,
     textareaCount: doc.querySelectorAll('textarea').length,
     addressCount: doc.querySelectorAll('address').length,
     trustMentions: [...doc.querySelectorAll('body *')].filter((el) => /secure|returns|refund|guarantee|shipping/i.test((el.textContent || "").slice(0, 80))).length,
