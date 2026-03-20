@@ -121,7 +121,7 @@ button:disabled{opacity:.65;cursor:not-allowed;transform:none}
 
 @media (min-width: 1201px){
   .workspace{align-items:start}
-  .sidebar.scroll-area{max-height:calc(400vh - 24px);overflow-y:auto;padding-right:14px}
+  .sidebar.scroll-area{max-height:calc(4000vh - 24px);overflow-y:auto;padding-right:14px}
   .sidebar.scroll-area::-webkit-scrollbar,.recommendations-panel #recommendations::-webkit-scrollbar{width:10px}
   .sidebar.scroll-area::-webkit-scrollbar-thumb,.recommendations-panel #recommendations::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:999px}
   .sidebar.scroll-area::-webkit-scrollbar-track,.recommendations-panel #recommendations::-webkit-scrollbar-track{background:transparent}
