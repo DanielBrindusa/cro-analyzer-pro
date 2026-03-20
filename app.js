@@ -674,14 +674,8 @@ async function runAnalysis() {
 
     recommendations.push(...buildManualRecommendations(manualChecklist, pageResults, plan));
 
-    progressUnits += 0.5;
-    updateProgress(progressUnits, analysisTotalUnits, "Checking required trust and contact pages...");
-    const siteRequirementChecks = await auditSiteRequirementChecks({
-      homeUrl,
-      pageResults,
-      discovered: STATE.discovered
-    });
-    recommendations.push(...buildSiteRequirementRecommendations(siteRequirementChecks));
+    const requiredElementsAudit = await analyzeRequiredElementsAudit(homeSeedUrl, pageResults);
+    requiredElementsAudit.recommendations.forEach((rec) => recommendations.push(rec));
 
     const cleanedRecommendations = dedupeRecommendations(recommendations);
     cleanedRecommendations.sort((a, b) => {
@@ -715,6 +709,7 @@ async function runAnalysis() {
       pagesAnalyzed: configuredPages.length,
       criticalIssues,
       pageResults,
+      requiredElementsAudit,
       recommendations: topRecommendations,
       manualChecklistCount: manualChecklist.length,
       recommendationLimit,
@@ -722,7 +717,6 @@ async function runAnalysis() {
       homePageSpeed,
       competitorReport,
       discovered: STATE.discovered,
-      siteRequirementChecks,
       revenueOpportunity: estimateRevenueOpportunity(overallScore, criticalIssues, configuredPages.length),
       inspectionSummary: buildInspectionSummary(pageResults)
     };
@@ -1823,7 +1817,9 @@ async function analyzePage(pageType, fetchResult, plan) {
     evidenceBadges: context.evidenceBadges || [],
     structuredDataSummary: summarizeStructuredData(context.structuredData),
     extractedSignals: context.extractedSignals,
-    resourceSummary: context.resourceSummary
+    resourceSummary: context.resourceSummary,
+    pageLinks: context.pageLinks || [],
+    pageSignals: buildRequiredElementSignals(context)
   };
 }
 
@@ -2024,7 +2020,7 @@ function renderReport(report) {
 
   renderInspectionQuality(report);
   renderRecommendations(report.recommendations);
-  renderSiteRequirementChecks(report.siteRequirementChecks);
+  renderRequiredElementsResults(report.requiredElementsAudit);
   renderPageBreakdown(report.pageResults);
   renderStackInsights(report.stackSummary);
   renderCompetitorComparison(report.competitorReport);
@@ -2115,36 +2111,19 @@ function renderRecommendations(recommendations) {
   }).join("");
 }
 
-function renderSiteRequirementChecks(siteRequirementChecks) {
-  const container = document.getElementById("siteRequirementChecks");
-  if (!container) return;
-
-  const checks = Array.isArray(siteRequirementChecks?.checks) ? siteRequirementChecks.checks : [];
-  if (!checks.length) {
-    container.className = "requirement-checks empty-state";
-    container.textContent = "Run an analysis to see these automatic results.";
-    return;
-  }
-
-  container.className = "requirement-checks";
-  container.innerHTML = checks.map((item) => {
-    const matchedPages = Array.isArray(item.matchedPages) ? item.matchedPages : [];
-    const statusClass = item.status === "Pass" ? "pass" : item.status === "Partial" ? "partial" : "fail";
-    return `
-      <article class="requirement-card">
-        <div class="requirement-top">
-          <div>
-            <div class="requirement-title">${escapeHtml(item.label || "Requirement check")}</div>
-            <div class="requirement-meta">${escapeHtml(item.summary || "")}</div>
-          </div>
-          <span class="requirement-status ${statusClass}">${escapeHtml(item.status || "Fail")}</span>
-        </div>
-        <div class="requirement-evidence"><strong>Result:</strong> ${escapeHtml(item.evidence || "No evidence available.")}</div>
-        <div class="requirement-solution"><strong>Recommendation:</strong> ${escapeHtml(item.recommendation || "No action required.")}</div>
-        ${matchedPages.length ? `<div class="requirement-pages">${matchedPages.map((page) => `<a href="${escapeAttribute(page.url || '#')}" target="_blank" rel="noopener noreferrer">${escapeHtml(page.label || page.url || 'Detected page')}</a>`).join("")}</div>` : ""}
-      </article>
-    `;
-  }).join("");
+function hydrateReportLinks(report) {
+  if (!report || !Array.isArray(report.recommendations)) return report;
+  report.recommendations = report.recommendations.map((item) => {
+    const page = item.page || normalizePageType(item.pageLabel) || guessPageFromText(item.title || item.detail || "") || "general";
+    const pageLabel = item.pageLabel || PAGE_LABELS[page] || "General";
+    return {
+      ...item,
+      page,
+      pageLabel,
+      url: item.url || getRecommendationDestination({ ...item, page, pageLabel }, report.pageResults || [])
+    };
+  });
+  return report;
 }
 
 function getRecommendationDestination(item, pageResults) {
@@ -2348,6 +2327,237 @@ function renderTrendChart() {
   `;
 }
 
+function renderRequiredElementsResults(audit) {
+  const container = document.getElementById("requiredElementsResults");
+  if (!container) return;
+  const checks = audit?.checks || [];
+  if (!checks.length) {
+    container.className = "requirements-grid empty-state";
+    container.textContent = "Run an analysis to see these checks.";
+    return;
+  }
+
+  container.className = "requirements-grid";
+  container.innerHTML = checks.map((item) => {
+    const statusClass = item.passed ? "success" : "warn";
+    const foundIn = item.locations?.length
+      ? `Found in: ${item.locations.map((entry) => entry.label || shortDisplayUrl(entry.url || "")).join(" · ")}`
+      : (item.passed ? "Found automatically during the audit." : "Not found in the pages that could be inspected automatically.");
+    const links = (item.locations || []).slice(0, 3).map((entry) => entry.url
+      ? `<a class="inline-link" href="${escapeAttribute(entry.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(entry.label || shortDisplayUrl(entry.url))}</a>`
+      : "").join("");
+
+    return `
+      <article class="requirement-card">
+        <div class="requirement-head">
+          <div>
+            <div class="requirement-title">${escapeHtml(item.label)}</div>
+            <div class="requirement-found">${escapeHtml(foundIn)}</div>
+          </div>
+          <span class="tag ${statusClass}">${item.passed ? "Passed" : "Missing"}</span>
+        </div>
+        <div class="requirement-meta">
+          <p class="requirement-evidence">${escapeHtml(item.evidence || (item.passed ? "Signal detected." : "No reliable signal detected."))}</p>
+          ${links ? `<div class="requirement-links">${links}</div>` : ""}
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+async function analyzeRequiredElementsAudit(homeSeedUrl, pageResults) {
+  const baseUrl = homeSeedUrl || pageResults.find((page) => page.type === "home")?.url || pageResults[0]?.url || "";
+  const fetchedPages = pageResults.filter((page) => page.fetchStatus?.startsWith("Fetched"));
+  const quickChecks = buildInitialRequiredChecks(pageResults);
+  const requirements = [
+    { key: "contactPage", label: "Contact page" },
+    { key: "contactDetails", label: "Contact details" },
+    { key: "contactForm", label: "Contact form" },
+    { key: "faqPageOrSection", label: "FAQ page or section" },
+    { key: "aboutPage", label: "About Us page" }
+  ].map((item) => ({ ...item, ...(quickChecks[item.key] || { passed: false, evidence: "No reliable signal found yet.", locations: [] }) }));
+
+  const candidateMap = {
+    contactPage: buildRequirementCandidates("contact", baseUrl, pageResults),
+    faqPageOrSection: buildRequirementCandidates("faq", baseUrl, pageResults),
+    aboutPage: buildRequirementCandidates("about", baseUrl, pageResults)
+  };
+
+  const fetchedCandidateAnalyses = [];
+  for (const url of uniqueArray([
+    ...candidateMap.contactPage.slice(0, 3),
+    ...candidateMap.faqPageOrSection.slice(0, 3),
+    ...candidateMap.aboutPage.slice(0, 3)
+  ]).slice(0, 7)) {
+    if (!url) continue;
+    const response = await fetchPageHtml(url);
+    if (!response.ok) continue;
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(response.html, "text/html");
+    const context = await buildAnalysisContext(doc, response.html, url);
+    fetchedCandidateAnalyses.push({ url, label: inferRequirementLabelFromUrl(url), context });
+  }
+
+  const extraSignals = fetchedCandidateAnalyses.map((entry) => ({
+    url: entry.url,
+    label: entry.label,
+    signals: buildRequiredElementSignals(entry.context)
+  }));
+
+  requirements.forEach((item) => {
+    if (item.passed) return;
+    if (item.key === "contactPage") {
+      const found = extraSignals.find((entry) => entry.signals.contactPage);
+      if (found) Object.assign(item, { passed: true, evidence: found.signals.contactPageEvidence, locations: [{ url: found.url, label: found.label }] });
+    }
+    if (item.key === "contactDetails") {
+      const found = extraSignals.find((entry) => entry.signals.contactDetails);
+      if (found) Object.assign(item, { passed: true, evidence: found.signals.contactDetailsEvidence, locations: [{ url: found.url, label: found.label }] });
+    }
+    if (item.key === "contactForm") {
+      const found = extraSignals.find((entry) => entry.signals.contactForm);
+      if (found) Object.assign(item, { passed: true, evidence: found.signals.contactFormEvidence, locations: [{ url: found.url, label: found.label }] });
+    }
+    if (item.key === "faqPageOrSection") {
+      const found = extraSignals.find((entry) => entry.signals.faqPageOrSection);
+      if (found) Object.assign(item, { passed: true, evidence: found.signals.faqEvidence, locations: [{ url: found.url, label: found.label }] });
+    }
+    if (item.key === "aboutPage") {
+      const found = extraSignals.find((entry) => entry.signals.aboutPage);
+      if (found) Object.assign(item, { passed: true, evidence: found.signals.aboutEvidence, locations: [{ url: found.url, label: found.label }] });
+    }
+  });
+
+  const recommendations = requirements
+    .filter((item) => !item.passed)
+    .map((item) => ({
+      title: item.label,
+      detail: item.key === "contactPage"
+        ? "A dedicated contact page was not found automatically."
+        : item.key === "contactDetails"
+          ? "Visible contact details such as email, phone, or address were not found clearly enough."
+          : item.key === "contactForm"
+            ? "A contact form was not found automatically."
+            : item.key === "faqPageOrSection"
+              ? "No FAQ page or FAQ section was found automatically."
+              : "An About Us or brand story page was not found automatically.",
+      priority: item.key === "contactPage" || item.key === "contactDetails" || item.key === "aboutPage" ? 6 : 5,
+      impactLabel: "High",
+      page: "general",
+      pageLabel: "General",
+      type: "automatic",
+      sourceLabel: "Automatic inspection",
+      confidence: fetchedPages.length ? "Medium" : "Low",
+      evidence: item.evidence || "No reliable signal detected in the fetched pages or targeted support-page checks.",
+      url: baseUrl
+    }));
+
+  return { checks: requirements, recommendations };
+}
+
+function buildInitialRequiredChecks(pageResults) {
+  const output = {
+    contactPage: { passed: false, evidence: "No contact page signal found yet.", locations: [] },
+    contactDetails: { passed: false, evidence: "No contact details signal found yet.", locations: [] },
+    contactForm: { passed: false, evidence: "No contact form signal found yet.", locations: [] },
+    faqPageOrSection: { passed: false, evidence: "No FAQ signal found yet.", locations: [] },
+    aboutPage: { passed: false, evidence: "No About Us signal found yet.", locations: [] }
+  };
+
+  pageResults.forEach((page) => {
+    const signals = page.pageSignals || {};
+    const location = { url: page.url, label: page.label };
+    if (signals.contactPage && !output.contactPage.passed) output.contactPage = { passed: true, evidence: signals.contactPageEvidence, locations: [location] };
+    if (signals.contactDetails && !output.contactDetails.passed) output.contactDetails = { passed: true, evidence: signals.contactDetailsEvidence, locations: [location] };
+    if (signals.contactForm && !output.contactForm.passed) output.contactForm = { passed: true, evidence: signals.contactFormEvidence, locations: [location] };
+    if (signals.faqPageOrSection && !output.faqPageOrSection.passed) output.faqPageOrSection = { passed: true, evidence: signals.faqEvidence, locations: [location] };
+    if (signals.aboutPage && !output.aboutPage.passed) output.aboutPage = { passed: true, evidence: signals.aboutEvidence, locations: [location] };
+  });
+
+  return output;
+}
+
+function buildRequirementCandidates(type, baseUrl, pageResults) {
+  const patterns = {
+    contact: [/contact/i, /support/i, /help/i, /customer-service/i],
+    faq: [/faq/i, /frequently-asked/i, /questions/i, /help-center/i],
+    about: [/about/i, /our-story/i, /story/i, /our-brand/i, /who-we-are/i]
+  }[type] || [];
+
+  const commonPaths = {
+    contact: ["/pages/contact", "/contact", "/contact-us", "/support", "/pages/contact-us"],
+    faq: ["/pages/faq", "/faq", "/faqs", "/help", "/help-center"],
+    about: ["/pages/about-us", "/about", "/about-us", "/our-story", "/pages/about"]
+  }[type] || [];
+
+  const fromLinks = pageResults.flatMap((page) => (page.pageLinks || []).map((link) => link.url)).filter((url) => patterns.some((pattern) => pattern.test(url)));
+  const normalizedCommon = commonPaths.map((path) => normalizeDiscoveredUrl(path, baseUrl)).filter(Boolean);
+  return uniqueArray([...fromLinks, ...normalizedCommon]);
+}
+
+function buildRequiredElementSignals(context) {
+  const pageUrl = String(context?.url || "");
+  const title = `${context?.title || ""} ${context?.metaDescription || ""} ${context?.ogTitle || ""} ${context?.ogDescription || ""}`.toLowerCase();
+  const text = String(context?.signalText || "");
+  const rawText = `${title} ${text}`;
+  const links = context?.pageLinks || [];
+  const hasMailto = /mailto:/i.test(rawText);
+  const hasTel = /tel:/i.test(rawText);
+  const hasEmail = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(rawText);
+  const hasPhone = /(?:\+?\d[\d\s().-]{6,}\d)/.test(rawText);
+  const hasAddress = !!context?.domStats?.addressCount || /(address|street|st\.?|road|rd\.?|avenue|ave\.?|boulevard|blvd\.?|timisoara|bucharest|romania|zip|postal code)/i.test(rawText);
+  const hasContactDetails = hasMailto || hasTel || hasEmail || hasPhone || hasAddress;
+  const contactPage = /\/contact(?:[-/]|$)|\/support(?:[-/]|$)|\/help(?:[-/]|$)/i.test(pageUrl) || /contact us|customer service|get in touch/.test(title) || links.some((link) => /contact|support|help/i.test(`${link.text} ${link.url}`));
+  const formCount = context?.domStats?.forms || 0;
+  const contactForm = formCount > 0 && ((context?.domStats?.textareaCount || 0) > 0 || (context?.domStats?.emailInputs || 0) > 0) && (/contact|message|send|support|get in touch/i.test(rawText) || contactPage);
+  const faqPageOrSection = !!context?.domStats?.faqBlocks || hasStructuredDataType(context, "FAQPage", "Question") || /faq|frequently asked questions|common questions/i.test(rawText) || /\/faq(?:[-/]|$)|\/faqs(?:[-/]|$)/i.test(pageUrl);
+  const aboutPage = /\/about(?:[-/]|$)|\/our-story(?:[-/]|$)|\/about-us(?:[-/]|$)/i.test(pageUrl) || /about us|our story|our mission|who we are/.test(title);
+
+  return {
+    contactPage,
+    contactPageEvidence: contactPage
+      ? (pageUrl && /contact|support|help/i.test(pageUrl) ? `Detected a likely contact/support page at ${shortDisplayUrl(pageUrl)}.` : "Contact/support page wording or navigation was detected.")
+      : "No dedicated contact/support page signal was detected.",
+    contactDetails: hasContactDetails,
+    contactDetailsEvidence: hasContactDetails
+      ? `Detected ${[hasEmail || hasMailto ? "email" : "", hasPhone || hasTel ? "phone" : "", hasAddress ? "address/location" : ""].filter(Boolean).join(", ")} details in the inspected content.`
+      : "No clear email, phone, or address details were detected.",
+    contactForm,
+    contactFormEvidence: contactForm
+      ? `Detected a likely contact form with ${formCount} form${formCount === 1 ? "" : "s"} and contact-related fields or wording.`
+      : "No dedicated contact form was detected.",
+    faqPageOrSection,
+    faqEvidence: faqPageOrSection
+      ? (hasStructuredDataType(context, "FAQPage", "Question") ? "Detected FAQ schema or question markup in the inspected page." : "Detected FAQ wording, FAQ blocks, or an FAQ page path.")
+      : "No FAQ page or FAQ section was detected.",
+    aboutPage,
+    aboutEvidence: aboutPage
+      ? (pageUrl && /about|our-story/i.test(pageUrl) ? `Detected an About Us style page at ${shortDisplayUrl(pageUrl)}.` : "Detected About Us / brand story wording in the inspected page.")
+      : "No About Us page signal was detected."
+  };
+}
+
+function extractPageLinks(doc, baseUrl) {
+  return [...doc.querySelectorAll('a[href]')].slice(0, 160).map((node) => {
+    const rawHref = node.getAttribute('href') || '';
+    const url = normalizeDiscoveredUrl(rawHref, baseUrl);
+    const text = (node.textContent || node.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+    if (!url) return null;
+    return { url, text };
+  }).filter(Boolean);
+}
+
+function inferRequirementLabelFromUrl(url) {
+  if (/contact|support|help/i.test(url)) return "Detected support page";
+  if (/faq|questions/i.test(url)) return "Detected FAQ page";
+  if (/about|our-story/i.test(url)) return "Detected About page";
+  return shortDisplayUrl(url);
+}
+
+function uniqueArray(items) {
+  return [...new Set((items || []).filter(Boolean))];
+}
+
 function renderPageBreakdown(pageResults) {
   const container = document.getElementById("pageBreakdown");
   if (!pageResults.length) {
@@ -2406,239 +2616,6 @@ function renderPageBreakdown(pageResults) {
       </article>
     `;
   }).join("");
-}
-
-
-async function auditSiteRequirementChecks({ homeUrl, pageResults = [], discovered = {} }) {
-  const baseUrl = String(homeUrl || pageResults.find((page) => page.type === "home")?.url || pageResults[0]?.url || "").trim();
-  if (!baseUrl) return { inspectedCount: 0, checks: [] };
-
-  const candidateMap = new Map();
-  const addCandidate = (url, reason = "") => {
-    const normalized = normalizeDiscoveredUrl(url, baseUrl);
-    if (!normalized) return;
-    if (safeHostname(normalized) !== safeHostname(baseUrl)) return;
-    if (!candidateMap.has(normalized)) candidateMap.set(normalized, { url: normalized, reasons: [] });
-    if (reason) candidateMap.get(normalized).reasons.push(reason);
-  };
-
-  addCandidate(baseUrl, "home");
-  pageResults.forEach((page) => addCandidate(page.url, page.type || "configured"));
-  (discovered?.products || []).forEach((url) => addCandidate(url, "discovered"));
-  (discovered?.categories || []).forEach((url) => addCandidate(url, "discovered"));
-
-  [
-    "/contact", "/contact-us", "/pages/contact", "/pages/contact-us", "/support", "/help", "/customer-service",
-    "/faq", "/faqs", "/frequently-asked-questions", "/help-center", "/questions",
-    "/about", "/about-us", "/our-story", "/our-brand", "/pages/about", "/pages/about-us", "/pages/our-story"
-  ].forEach((path) => addCandidate(path, "likely required page"));
-
-  const homeFetch = await fetchPageHtml(baseUrl);
-  if (homeFetch?.ok && homeFetch.html) {
-    const homeDoc = parseHtmlDocument(homeFetch.html);
-    extractRequirementLinks(homeDoc, baseUrl).forEach((url) => addCandidate(url, "linked from home"));
-  }
-
-  const rankedCandidates = [...candidateMap.values()]
-    .sort((a, b) => rankRequirementCandidate(b.url, b.reasons) - rankRequirementCandidate(a.url, a.reasons))
-    .slice(0, 14);
-
-  const inspectedPages = (await mapWithConcurrency(rankedCandidates, 3, async (candidate) => {
-    const fetchResult = await fetchPageHtml(candidate.url);
-    if (!fetchResult?.ok || !fetchResult.html) return null;
-    return inspectRequirementPage(fetchResult, candidate.reasons);
-  })).filter(Boolean);
-
-  return {
-    inspectedCount: inspectedPages.length,
-    checks: buildSiteRequirementCheckResults(inspectedPages)
-  };
-}
-
-function parseHtmlDocument(html) {
-  return new DOMParser().parseFromString(String(html || ""), "text/html");
-}
-
-function extractRequirementLinks(doc, baseUrl) {
-  const links = [];
-  [...doc.querySelectorAll("a[href]")].forEach((anchor) => {
-    const href = anchor.getAttribute("href") || "";
-    const text = `${anchor.textContent || ""} ${anchor.getAttribute("aria-label") || ""}`.toLowerCase();
-    if (!/(contact|support|help|faq|question|about|story|brand)/i.test(`${href} ${text}`)) return;
-    const normalized = normalizeDiscoveredUrl(href, baseUrl);
-    if (normalized) links.push(normalized);
-  });
-  return [...new Set(links)];
-}
-
-function rankRequirementCandidate(url, reasons = []) {
-  const value = `${url} ${(reasons || []).join(" ")}`.toLowerCase();
-  let score = 0;
-  if (/contact|support|help|customer-service/.test(value)) score += 7;
-  if (/faq|question/.test(value)) score += 7;
-  if (/about|story|brand/.test(value)) score += 7;
-  if (/home/.test(value)) score += 2;
-  return score;
-}
-
-function inspectRequirementPage(fetchResult, reasons = []) {
-  const doc = parseHtmlDocument(fetchResult.html);
-  const text = (doc.body?.innerText || "").replace(/\s+/g, " ").trim();
-  const lowerText = text.toLowerCase();
-  const title = getDocumentTitle(doc).toLowerCase();
-  const heading = (doc.querySelector("h1")?.textContent || "").trim().toLowerCase();
-  const url = String(fetchResult.url || fetchResult.finalUrl || "").trim();
-  const structuredData = extractStructuredData(doc);
-  const detailsBlocks = doc.querySelectorAll("details").length;
-  const addressNode = !!doc.querySelector("address");
-  const mailto = !!doc.querySelector('a[href^="mailto:"]');
-  const tel = !!doc.querySelector('a[href^="tel:"]');
-  const emailPattern = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(text);
-  const phonePattern = /(?:\+?\d[\d\s().-]{6,}\d)/.test(text);
-  const contactForms = [...doc.querySelectorAll("form")].filter((form) => {
-    const formText = `${form.textContent || ""} ${form.getAttribute("action") || ""}`.toLowerCase();
-    const hasField = form.querySelector("input, textarea, select");
-    return !!hasField && /(contact|message|support|name|email)/.test(formText);
-  });
-  const faqSignals = doc.querySelectorAll('[class*="faq" i], [id*="faq" i], [itemtype*="FAQPage" i], [itemtype*="Question" i]').length;
-  const aboutSignals = /(about|our story|our brand|our mission|who we are|our journey)/.test(`${title} ${heading} ${url} ${lowerText.slice(0, 2500)}`);
-  const contactSignals = /(contact|support|help center|customer service|get in touch)/.test(`${title} ${heading} ${url} ${lowerText.slice(0, 2200)}`);
-  const faqPageSignals = /(faq|frequently asked questions|common questions)/.test(`${title} ${heading} ${url}`) || faqSignals > 0 || structuredData.some((item) => (item.types || []).some((type) => /FAQPage|Question/i.test(type)));
-
-  return {
-    url,
-    label: buildRequirementPageLabel(url, title || heading || fetchResult.url || "Detected page"),
-    reasons,
-    hasContactPageSignal: contactSignals,
-    hasContactDetails: mailto || tel || addressNode || emailPattern || phonePattern,
-    hasContactForm: contactForms.length > 0,
-    hasFaqSignal: faqPageSignals || (detailsBlocks >= 2 && /\?/.test(text)),
-    hasAboutSignal: aboutSignals,
-    evidence: {
-      contact: contactSignals ? summarizeRequirementEvidence(title, heading, url, [mailto && "mailto link", tel && "telephone link", addressNode && "address block"].filter(Boolean)) : "",
-      contactDetails: summarizeRequirementEvidence(title, heading, url, [mailto && "mailto link", tel && "telephone link", addressNode && "address block", emailPattern && "email pattern", phonePattern && "phone pattern"].filter(Boolean)),
-      contactForm: contactForms.length ? summarizeRequirementEvidence(title, heading, url, [`${contactForms.length} form${contactForms.length === 1 ? "" : "s"}`]) : "",
-      faq: (faqPageSignals || detailsBlocks >= 2) ? summarizeRequirementEvidence(title, heading, url, [faqSignals ? `${faqSignals} FAQ signal${faqSignals === 1 ? "" : "s"}` : "", detailsBlocks >= 2 ? `${detailsBlocks} expandable sections` : ""].filter(Boolean)) : "",
-      about: aboutSignals ? summarizeRequirementEvidence(title, heading, url, []) : ""
-    }
-  };
-}
-
-function summarizeRequirementEvidence(title, heading, url, markers = []) {
-  const parts = [];
-  if (title) parts.push(`title: ${truncateText(title, 80)}`);
-  if (heading && heading !== title) parts.push(`heading: ${truncateText(heading, 80)}`);
-  if (markers.length) parts.push(markers.join(", "));
-  if (url) parts.push(truncateText(url, 120));
-  return parts.join(" · ");
-}
-
-function buildRequirementPageLabel(url, fallback) {
-  const pathname = safePathname(url);
-  if (/contact|support|help|customer-service/i.test(pathname)) return "Detected contact area";
-  if (/faq|question/i.test(pathname)) return "Detected FAQ area";
-  if (/about|story|brand/i.test(pathname)) return "Detected About Us area";
-  return truncateText(fallback || url || "Detected page", 70);
-}
-
-function buildSiteRequirementCheckResults(inspectedPages) {
-  return [
-    createRequirementCheck({
-      id: "contact-page",
-      label: "Contact page or support page exists",
-      summary: "The analyzer looks for a dedicated contact or support destination.",
-      matchedPages: inspectedPages.filter((page) => page.hasContactPageSignal),
-      failRecommendation: "Create a dedicated Contact page or Help/Support page and link it clearly from the header or footer."
-    }),
-    createRequirementCheck({
-      id: "contact-details",
-      label: "Contact details are visible",
-      summary: "The analyzer checks for email, phone, address, or similar visible contact information.",
-      matchedPages: inspectedPages.filter((page) => page.hasContactDetails),
-      failRecommendation: "Add clear contact details such as email, phone number, address, or business contact information."
-    }),
-    createRequirementCheck({
-      id: "contact-form",
-      label: "Contact form is available",
-      summary: "The analyzer checks for a usable contact form on a contact or support area.",
-      matchedPages: inspectedPages.filter((page) => page.hasContactForm),
-      failRecommendation: "Add a contact form so visitors can easily reach the business without leaving the site."
-    }),
-    createRequirementCheck({
-      id: "faq",
-      label: "FAQ page or FAQ section exists",
-      summary: "The analyzer looks for FAQ pages, FAQ sections, or question-based expandable content.",
-      matchedPages: inspectedPages.filter((page) => page.hasFaqSignal),
-      failRecommendation: "Create an FAQ page or add an FAQ section that answers the most common customer questions."
-    }),
-    createRequirementCheck({
-      id: "about",
-      label: "About Us page exists",
-      summary: "The analyzer looks for an About Us, Our Story, or brand-story page.",
-      matchedPages: inspectedPages.filter((page) => page.hasAboutSignal),
-      failRecommendation: "Create an About Us page that explains who the brand is, what it stands for, and why customers should trust it."
-    })
-  ];
-}
-
-function createRequirementCheck({ id, label, summary, matchedPages = [], failRecommendation }) {
-  const uniquePages = dedupeRequirementPages(matchedPages);
-  const passed = uniquePages.length > 0;
-  return {
-    id,
-    label,
-    summary,
-    status: passed ? "Pass" : "Fail",
-    passed,
-    matchedPages: uniquePages,
-    evidence: passed
-      ? `Detected on ${uniquePages.length} page${uniquePages.length === 1 ? "" : "s"}: ${uniquePages.map((page) => page.evidenceText).filter(Boolean).slice(0, 2).join(" | ") || uniquePages[0].url}`
-      : "No strong automatic signal was found for this requirement on the inspected pages.",
-    recommendation: passed ? "No action required unless you want to improve visibility even more." : failRecommendation
-  };
-}
-
-function dedupeRequirementPages(items) {
-  const seen = new Set();
-  return (items || []).map((page) => ({
-    url: page.url,
-    label: page.label,
-    evidenceText: pickRequirementEvidenceText(page)
-  })).filter((page) => {
-    if (!page.url || seen.has(page.url)) return false;
-    seen.add(page.url);
-    return true;
-  });
-}
-
-function pickRequirementEvidenceText(page) {
-  if (page.hasContactForm && page.evidence?.contactForm) return page.evidence.contactForm;
-  if (page.hasContactDetails && page.evidence?.contactDetails) return page.evidence.contactDetails;
-  if (page.hasFaqSignal && page.evidence?.faq) return page.evidence.faq;
-  if (page.hasAboutSignal && page.evidence?.about) return page.evidence.about;
-  if (page.hasContactPageSignal && page.evidence?.contact) return page.evidence.contact;
-  return page.url || "";
-}
-
-function buildSiteRequirementRecommendations(siteRequirementChecks) {
-  const checks = Array.isArray(siteRequirementChecks?.checks) ? siteRequirementChecks.checks : [];
-  return checks.filter((item) => !item.passed).map((item) => ({
-    title: item.label,
-    detail: item.recommendation,
-    priority: 9,
-    impactLabel: "High",
-    page: "general",
-    pageLabel: "General",
-    type: "automatic",
-    sourceLabel: "Required page audit",
-    confidence: "Medium",
-    evidence: item.evidence,
-    url: ""
-  }));
-}
-
-function safePathname(value) {
-  try { return new URL(value).pathname.toLowerCase(); } catch (error) { return ""; }
 }
 
 function buildInspectionSummary(pageResults) {
@@ -2846,6 +2823,7 @@ async function buildAnalysisContext(doc, html, pageUrl) {
       inlineCount: inlineSignals.inlineScripts + inlineSignals.inlineStyles + commerceSignals.stateSnippets.length,
       totalSources: linkedResources.assetCount + platformApiSignals.assetCount + inlineSignals.inlineScripts + inlineSignals.inlineStyles + commerceSignals.stateSnippets.length + structuredData.length + 1
     },
+    pageLinks: extractPageLinks(doc, pageUrl),
     evidenceBadges: [...new Set(evidenceBadges)].slice(0, 10),
     extractedSignals: [...new Set(extractedSignals)].slice(0, 12),
     domStats,
@@ -3049,6 +3027,8 @@ function collectDomStats(doc, structuredData) {
     accordions: doc.querySelectorAll('details, summary, [aria-expanded]').length,
     reviewWidgets: doc.querySelectorAll('[class*="review" i], [data-rating], [itemprop="review"], [itemprop="aggregateRating"]').length,
     faqBlocks: doc.querySelectorAll('[class*="faq" i], [id*="faq" i], details').length,
+    textareaCount: doc.querySelectorAll('textarea').length,
+    addressCount: doc.querySelectorAll('address').length,
     trustMentions: [...doc.querySelectorAll('body *')].filter((el) => /secure|returns|refund|guarantee|shipping/i.test((el.textContent || "").slice(0, 80))).length,
     footerLinks: doc.querySelectorAll('footer a[href]').length,
     interactiveCount: allInteractive.length,
@@ -3384,15 +3364,6 @@ function downloadPdfReport(report) {
     lines.push(`Solution: ${getSolutionText(item)}`);
     lines.push("");
   });
-  if (Array.isArray(report.siteRequirementChecks?.checks) && report.siteRequirementChecks.checks.length) {
-    lines.push("Required trust and contact checks:");
-    report.siteRequirementChecks.checks.forEach((item) => {
-      lines.push(`- ${item.label}: ${item.status}`);
-      lines.push(`  Result: ${item.evidence}`);
-      lines.push(`  Recommendation: ${item.recommendation}`);
-    });
-    lines.push("");
-  }
   let y = 20;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(18);
