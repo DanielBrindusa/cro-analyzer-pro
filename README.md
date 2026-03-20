@@ -1,6 +1,6 @@
-# CRO Website Analyzer
+# CRO Analyzer Pro
 
-CRO Website Analyzer is a browser-based auditing application for reviewing the conversion readiness of ecommerce storefronts. It evaluates key pages against a structured CRO ruleset, generates prioritized findings, scores the storefront on a 0–100 scale, and presents actionable recommendations in a clean client-facing interface.
+CRO Analyzer Pro is a browser-based auditing application for reviewing the conversion readiness of ecommerce storefronts. It evaluates key pages against a structured CRO ruleset, generates prioritized findings, scores the storefront on a 0–100 scale, and presents actionable recommendations in a clean client-facing interface.
 
 The application is designed to run as a static front-end deployment and can be hosted on GitHub Pages or embedded into another website. In its current architecture, it requires no server to function for the core audit workflow, report generation, local persistence, and configurable ad placements. The main UI is defined in `index.html`, the styling in `styles.css`, the analysis and application logic in `app.js`, the checklist dataset in `checklist-data.js`, and the ad controls in `ads-config.json`.
 
@@ -76,7 +76,7 @@ Contains the CRO checklist dataset used to enrich scoring and recommendations wi
 Contains the separate ad configuration model for all ad placements on the page. Each slot can be enabled or disabled and configured independently without editing application logic.
 
 `LICENSE.txt`  
-Contains the proprietary license for the project under the Formatify brand.
+Contains the proprietary license for the project under the CRO Analyzer Pro brand.
 
 ## Supported page types
 
@@ -217,12 +217,12 @@ For a more advanced product version, the next logical upgrades would be:
 
 ## License
 
-This project is proprietary software under the Formatify brand.
+This project is proprietary software under the CRO Analyzer Pro brand.
 
 Copyright (c) 2026 Daniel Cristian Brindusa  
 All rights reserved.
 
-The included license states that the software and associated documentation are the exclusive property of Daniel Cristian Brindusa, operating under the Formatify brand, and may not be copied, modified, redistributed, reverse engineered, re-hosted, resold, or commercially exploited without explicit prior written permission.
+The included license states that the software and associated documentation are the exclusive property of Daniel Cristian Brindusa, operating under the CRO Analyzer Pro brand, and may not be copied, modified, redistributed, reverse engineered, re-hosted, resold, or commercially exploited without explicit prior written permission.
 
 ## Contact
 
