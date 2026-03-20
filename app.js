@@ -175,11 +175,6 @@ AUTOMATED_CHECKS.general.push(
   rule("general-mobile-cta-spacing", "Interactive elements appear plentiful enough for mobile-friendly browsing", 1, "pro", ({ context }) => (context?.domStats?.buttons || 0) >= 2 && ((context?.domStats?.forms || 0) + (context?.domStats?.searchInputs || 0) + (context?.domStats?.ctaCount || 0)) >= 3)
 );
 AUTOMATED_CHECKS.home.push(
-  rule("home-contact-page", "Store offers an accessible contact page or contact section", 3, "basic", ({ context }) => !!context?.siteEssentials?.contactPage?.exists),
-  rule("home-contact-details", "Store shows real contact details such as email, phone, or address", 3, "basic", ({ context }) => !!context?.siteEssentials?.contactDetails?.exists),
-  rule("home-contact-form", "Store offers a contact form for pre-purchase questions", 2, "basic", ({ context }) => !!context?.siteEssentials?.contactForm?.exists),
-  rule("home-faq-page-or-section", "Store offers an FAQ page or FAQ section", 3, "basic", ({ context }) => !!context?.siteEssentials?.faqPageOrSection?.exists),
-  rule("home-about-page", "Store offers an About Us page or brand story page", 3, "basic", ({ context }) => !!context?.siteEssentials?.aboutPage?.exists),
   rule("home-category-links", "Home page highlights category or collection links", 2, "pro", ({ doc, text }) => [...doc.querySelectorAll('a[href]')].some((a) => /\/(collections|category|shop)/i.test(a.getAttribute('href') || '')) || hasAny(text, ["shop by category", "collections"])),
   rule("home-usp-icons", "Home page highlights shopping benefits with supporting icons or short bullets", 2, "pro", ({ doc, text }) => doc.querySelectorAll('svg, [class*="icon" i]').length >= 3 && hasAny(text, ["free shipping", "easy returns", "guarantee"])),
   rule("home-newsletter", "Home page offers newsletter capture", 1, "pro", ({ doc }) => !!doc.querySelector('input[type="email"]')),
@@ -679,6 +674,15 @@ async function runAnalysis() {
 
     recommendations.push(...buildManualRecommendations(manualChecklist, pageResults, plan));
 
+    progressUnits += 0.5;
+    updateProgress(progressUnits, analysisTotalUnits, "Checking required trust and contact pages...");
+    const siteRequirementChecks = await auditSiteRequirementChecks({
+      homeUrl,
+      pageResults,
+      discovered: STATE.discovered
+    });
+    recommendations.push(...buildSiteRequirementRecommendations(siteRequirementChecks));
+
     const cleanedRecommendations = dedupeRecommendations(recommendations);
     cleanedRecommendations.sort((a, b) => {
       const impactDelta = impactRank(b.impactLabel) - impactRank(a.impactLabel);
@@ -718,6 +722,7 @@ async function runAnalysis() {
       homePageSpeed,
       competitorReport,
       discovered: STATE.discovered,
+      siteRequirementChecks,
       revenueOpportunity: estimateRevenueOpportunity(overallScore, criticalIssues, configuredPages.length),
       inspectionSummary: buildInspectionSummary(pageResults)
     };
@@ -1319,256 +1324,6 @@ function classifyDiscoveredUrl(url, labelText = "") {
   } catch (error) {
     return null;
   }
-}
-
-
-function buildEmptyEssentialRecord(type, pageUrl = "") {
-  return {
-    type,
-    exists: false,
-    url: "",
-    source: "not-found",
-    evidence: pageUrl ? `No strong ${type.replace(/([A-Z])/g, ' $1').toLowerCase()} signal was confirmed from ${pageUrl}.` : `No strong ${type.replace(/([A-Z])/g, ' $1').toLowerCase()} signal was confirmed.`
-  };
-}
-
-function buildEmptySiteEssentials(pageUrl = "") {
-  return {
-    contactPage: buildEmptyEssentialRecord("contactPage", pageUrl),
-    contactDetails: buildEmptyEssentialRecord("contactDetails", pageUrl),
-    contactForm: buildEmptyEssentialRecord("contactForm", pageUrl),
-    faqPageOrSection: buildEmptyEssentialRecord("faqPageOrSection", pageUrl),
-    aboutPage: buildEmptyEssentialRecord("aboutPage", pageUrl)
-  };
-}
-
-function mergeEssentialSignal(current, incoming) {
-  if (!incoming) return current;
-  if (!current || !current.exists || (incoming.exists && incoming.source === "linked-page" && current.source !== "linked-page")) {
-    return { ...current, ...incoming };
-  }
-  return current;
-}
-
-function getInternalLinkCandidates(doc, baseUrl) {
-  const results = [];
-  const seen = new Set();
-  [...doc.querySelectorAll('a[href]')].forEach((anchor) => {
-    const href = anchor.getAttribute('href') || '';
-    const normalized = normalizeDiscoveredUrl(href, baseUrl);
-    if (!normalized) return;
-    if (safeHostname(normalized) !== safeHostname(baseUrl)) return;
-    if (seen.has(normalized)) return;
-    seen.add(normalized);
-    const label = [
-      anchor.textContent || "",
-      anchor.getAttribute("aria-label") || "",
-      anchor.getAttribute("title") || ""
-    ].join(" ").replace(/\s+/g, " ").trim().toLowerCase();
-    results.push({ url: normalized, label });
-  });
-  return results;
-}
-
-function pickEssentialCandidateUrl(candidates, type, currentUrl = "") {
-  const scored = candidates
-    .map((candidate) => ({ ...candidate, score: scoreEssentialCandidate(candidate.url, candidate.label, type, currentUrl) }))
-    .filter((candidate) => candidate.score > 0)
-    .sort((a, b) => b.score - a.score);
-  return scored[0]?.url || "";
-}
-
-function scoreEssentialCandidate(url, label, type, currentUrl = "") {
-  const path = (() => {
-    try { return new URL(url).pathname.toLowerCase(); } catch (error) { return ""; }
-  })();
-  const combined = `${path} ${label}`.toLowerCase();
-  if (!combined || url === currentUrl) return 0;
-  if (/privacy|refund|return|terms|policy|shipping/.test(combined)) return 0;
-
-  let score = 0;
-  if (type === "contact") {
-    if (/(^|\/)(contact|contact-us|get-in-touch|support|customer-service|help-center)(\/|$)/.test(path)) score += 8;
-    if (/\b(contact|support|help|get in touch|customer service|email us|call us)\b/.test(label)) score += 6;
-  } else if (type === "faq") {
-    if (/(^|\/)(faq|faqs|frequently-asked-questions|help-center|questions)(\/|$)/.test(path)) score += 8;
-    if (/\b(faq|faqs|frequently asked questions|questions|help center)\b/.test(label)) score += 6;
-  } else if (type === "about") {
-    if (/(^|\/)(about|about-us|our-story|our-mission|who-we-are|brand-story|company)(\/|$)/.test(path)) score += 8;
-    if (/\b(about us|about|our story|our mission|who we are|company)\b/.test(label)) score += 6;
-  }
-  if (/pages\//.test(path)) score += 1;
-  return score;
-}
-
-function detectContactDetails(doc, text) {
-  const normalized = String(text || "").toLowerCase();
-  const hasEmailLink = !!doc.querySelector('a[href^="mailto:"]');
-  const hasPhoneLink = !!doc.querySelector('a[href^="tel:"]');
-  const hasAddress = !!doc.querySelector('address');
-  const hasEmailText = /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/i.test(text || "");
-  const hasPhoneText = /(?:\+\d{1,3}[\s().-]*)?(?:\d[\s().-]*){7,}/.test(text || "");
-  return {
-    exists: hasEmailLink || hasPhoneLink || hasAddress || hasEmailText || hasPhoneText,
-    evidence: [
-      hasEmailLink || hasEmailText ? "email" : "",
-      hasPhoneLink || hasPhoneText ? "phone" : "",
-      hasAddress ? "address" : ""
-    ].filter(Boolean).join(", ") || (normalized.includes("contact") ? "contact wording" : "No concrete detail found")
-  };
-}
-
-function detectContactForm(doc, text = "") {
-  const forms = [...doc.querySelectorAll('form')];
-  const form = forms.find((node) => {
-    const blob = [
-      node.getAttribute('id') || "",
-      node.getAttribute('class') || "",
-      node.getAttribute('action') || "",
-      node.textContent || ""
-    ].join(" ").toLowerCase();
-    const fieldCount = node.querySelectorAll('input, textarea, select').length;
-    const hasEmailField = !!node.querySelector('input[type="email"], input[name*="email" i]');
-    const hasMessageField = !!node.querySelector('textarea, input[name*="message" i], input[name*="subject" i]');
-    return fieldCount >= 2 && (hasEmailField || hasMessageField || /contact|message|get in touch|send/.test(blob));
-  });
-  if (form) return { exists: true, evidence: "contact-style form fields were found" };
-
-  const normalized = String(text || "").toLowerCase();
-  if (/contact form|send us a message|get in touch/.test(normalized)) {
-    return { exists: true, evidence: "contact-form wording was found" };
-  }
-  return { exists: false, evidence: "No contact-style form was found" };
-}
-
-function detectFaqPresence(doc, text, structuredData = []) {
-  const normalized = String(text || "").toLowerCase();
-  const hasFaqSchema = structuredData.some((item) => Array.isArray(item?.types) && item.types.some((type) => /faqpage|question/i.test(type)));
-  const faqSelector = !!doc.querySelector('[class*="faq" i], [id*="faq" i], [data-faq], [aria-label*="faq" i]');
-  const detailsCount = doc.querySelectorAll('details').length;
-  const questionHeadings = [...doc.querySelectorAll('h2, h3, h4, summary, button')].filter((node) => /\?$/.test((node.textContent || "").trim())).length;
-  const hasFaqText = /faq|faqs|frequently asked questions/.test(normalized);
-  return {
-    exists: hasFaqSchema || faqSelector || hasFaqText || detailsCount >= 3 || questionHeadings >= 3,
-    evidence: hasFaqSchema ? "FAQ schema" : faqSelector ? "FAQ block selector" : detailsCount >= 3 ? "accordion/details pattern" : questionHeadings >= 3 ? "multiple question headings" : hasFaqText ? "FAQ wording" : "No FAQ content found"
-  };
-}
-
-function detectAboutPresence(doc, text) {
-  const normalized = String(text || "").toLowerCase();
-  const aboutSelector = !!doc.querySelector('[class*="about" i], [id*="about" i], [data-about], [aria-label*="about" i]');
-  const aboutText = /\b(about us|our story|our mission|who we are|our brand|our company|founded in|meet the team)\b/.test(normalized);
-  return {
-    exists: aboutSelector || aboutText,
-    evidence: aboutSelector ? "about section selector" : aboutText ? "about/story wording" : "No about-us signal found"
-  };
-}
-
-async function inspectEssentialLinkedPage(url, type) {
-  const fetched = await fetchPageHtml(url);
-  if (!fetched.ok) {
-    return {
-      page: { exists: true, url, source: "link-only", evidence: `A likely ${type} page link was found, but the page content could not be fetched automatically.` }
-    };
-  }
-
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(fetched.html || "<html><body></body></html>", "text/html");
-  const text = ((doc.body?.innerText || stripHtmlToText(fetched.html) || "").replace(/\s+/g, " ").trim());
-  const structuredData = extractStructuredData(doc);
-
-  const result = {
-    page: { exists: true, url, source: "linked-page", evidence: `A likely ${type} page was confirmed at ${url}.` }
-  };
-
-  if (type === "contact") {
-    const details = detectContactDetails(doc, text);
-    const form = detectContactForm(doc, text);
-    result.contactDetails = { exists: details.exists, url, source: "linked-page", evidence: details.evidence };
-    result.contactForm = { exists: form.exists, url, source: "linked-page", evidence: form.evidence };
-  }
-
-  if (type === "faq") {
-    const faq = detectFaqPresence(doc, text, structuredData);
-    result.faqPageOrSection = { exists: faq.exists, url, source: "linked-page", evidence: faq.evidence };
-    result.page.exists = faq.exists || result.page.exists;
-    result.page.evidence = faq.exists ? `An FAQ page or section was confirmed at ${url}.` : result.page.evidence;
-  }
-
-  if (type === "about") {
-    const about = detectAboutPresence(doc, text);
-    result.aboutPage = { exists: about.exists, url, source: "linked-page", evidence: about.evidence };
-    result.page.exists = about.exists || result.page.exists;
-    result.page.evidence = about.exists ? `An About Us / brand story page was confirmed at ${url}.` : result.page.evidence;
-  }
-
-  return result;
-}
-
-async function inspectSiteEssentials(doc, html, pageUrl, structuredData = []) {
-  const siteEssentials = buildEmptySiteEssentials(pageUrl);
-  const text = ((doc.body?.innerText || stripHtmlToText(html) || "").replace(/\s+/g, " ").trim());
-
-  const onPageContact = /contact us|get in touch|customer service|need help/.test(text.toLowerCase()) || !!doc.querySelector('[id*="contact" i], [class*="contact" i], [aria-label*="contact" i]');
-  if (onPageContact) {
-    siteEssentials.contactPage = {
-      exists: true,
-      url: pageUrl,
-      source: "current-page",
-      evidence: "Contact wording or a contact block is visible on the analyzed page."
-    };
-  }
-
-  const contactDetails = detectContactDetails(doc, text);
-  if (contactDetails.exists) {
-    siteEssentials.contactDetails = { exists: true, url: pageUrl, source: "current-page", evidence: contactDetails.evidence };
-  }
-
-  const contactForm = detectContactForm(doc, text);
-  if (contactForm.exists) {
-    siteEssentials.contactForm = { exists: true, url: pageUrl, source: "current-page", evidence: contactForm.evidence };
-  }
-
-  const faqPresence = detectFaqPresence(doc, text, structuredData);
-  if (faqPresence.exists) {
-    siteEssentials.faqPageOrSection = { exists: true, url: pageUrl, source: "current-page", evidence: faqPresence.evidence };
-  }
-
-  const aboutPresence = detectAboutPresence(doc, text);
-  if (aboutPresence.exists) {
-    siteEssentials.aboutPage = { exists: true, url: pageUrl, source: "current-page", evidence: aboutPresence.evidence };
-  }
-
-  const candidates = getInternalLinkCandidates(doc, pageUrl);
-  const contactUrl = pickEssentialCandidateUrl(candidates, "contact", pageUrl);
-  const faqUrl = pickEssentialCandidateUrl(candidates, "faq", pageUrl);
-  const aboutUrl = pickEssentialCandidateUrl(candidates, "about", pageUrl);
-
-  if (!siteEssentials.contactPage.exists && contactUrl) {
-    siteEssentials.contactPage = { exists: true, url: contactUrl, source: "link", evidence: "A likely contact page link is visible in the storefront navigation or footer." };
-  }
-  if (!siteEssentials.faqPageOrSection.exists && faqUrl) {
-    siteEssentials.faqPageOrSection = { exists: true, url: faqUrl, source: "link", evidence: "A likely FAQ/help page link is visible in the storefront navigation or footer." };
-  }
-  if (!siteEssentials.aboutPage.exists && aboutUrl) {
-    siteEssentials.aboutPage = { exists: true, url: aboutUrl, source: "link", evidence: "A likely About Us / brand story page link is visible in the storefront navigation or footer." };
-  }
-
-  const tasks = [];
-  if (contactUrl) tasks.push(inspectEssentialLinkedPage(contactUrl, "contact"));
-  if (faqUrl && faqUrl !== contactUrl) tasks.push(inspectEssentialLinkedPage(faqUrl, "faq"));
-  if (aboutUrl && aboutUrl !== contactUrl && aboutUrl !== faqUrl) tasks.push(inspectEssentialLinkedPage(aboutUrl, "about"));
-
-  const results = await Promise.all(tasks);
-  results.forEach((entry) => {
-    if (!entry) return;
-    if (entry.contactDetails) siteEssentials.contactDetails = mergeEssentialSignal(siteEssentials.contactDetails, entry.contactDetails);
-    if (entry.contactForm) siteEssentials.contactForm = mergeEssentialSignal(siteEssentials.contactForm, entry.contactForm);
-    if (entry.faqPageOrSection) siteEssentials.faqPageOrSection = mergeEssentialSignal(siteEssentials.faqPageOrSection, entry.faqPageOrSection);
-    if (entry.aboutPage) siteEssentials.aboutPage = mergeEssentialSignal(siteEssentials.aboutPage, entry.aboutPage);
-  });
-
-  return siteEssentials;
 }
 
 function createEmptyDiscoveryResult(baseUrl = "") {
@@ -2269,6 +2024,7 @@ function renderReport(report) {
 
   renderInspectionQuality(report);
   renderRecommendations(report.recommendations);
+  renderSiteRequirementChecks(report.siteRequirementChecks);
   renderPageBreakdown(report.pageResults);
   renderStackInsights(report.stackSummary);
   renderCompetitorComparison(report.competitorReport);
@@ -2359,19 +2115,36 @@ function renderRecommendations(recommendations) {
   }).join("");
 }
 
-function hydrateReportLinks(report) {
-  if (!report || !Array.isArray(report.recommendations)) return report;
-  report.recommendations = report.recommendations.map((item) => {
-    const page = item.page || normalizePageType(item.pageLabel) || guessPageFromText(item.title || item.detail || "") || "general";
-    const pageLabel = item.pageLabel || PAGE_LABELS[page] || "General";
-    return {
-      ...item,
-      page,
-      pageLabel,
-      url: item.url || getRecommendationDestination({ ...item, page, pageLabel }, report.pageResults || [])
-    };
-  });
-  return report;
+function renderSiteRequirementChecks(siteRequirementChecks) {
+  const container = document.getElementById("siteRequirementChecks");
+  if (!container) return;
+
+  const checks = Array.isArray(siteRequirementChecks?.checks) ? siteRequirementChecks.checks : [];
+  if (!checks.length) {
+    container.className = "requirement-checks empty-state";
+    container.textContent = "Run an analysis to see these automatic results.";
+    return;
+  }
+
+  container.className = "requirement-checks";
+  container.innerHTML = checks.map((item) => {
+    const matchedPages = Array.isArray(item.matchedPages) ? item.matchedPages : [];
+    const statusClass = item.status === "Pass" ? "pass" : item.status === "Partial" ? "partial" : "fail";
+    return `
+      <article class="requirement-card">
+        <div class="requirement-top">
+          <div>
+            <div class="requirement-title">${escapeHtml(item.label || "Requirement check")}</div>
+            <div class="requirement-meta">${escapeHtml(item.summary || "")}</div>
+          </div>
+          <span class="requirement-status ${statusClass}">${escapeHtml(item.status || "Fail")}</span>
+        </div>
+        <div class="requirement-evidence"><strong>Result:</strong> ${escapeHtml(item.evidence || "No evidence available.")}</div>
+        <div class="requirement-solution"><strong>Recommendation:</strong> ${escapeHtml(item.recommendation || "No action required.")}</div>
+        ${matchedPages.length ? `<div class="requirement-pages">${matchedPages.map((page) => `<a href="${escapeAttribute(page.url || '#')}" target="_blank" rel="noopener noreferrer">${escapeHtml(page.label || page.url || 'Detected page')}</a>`).join("")}</div>` : ""}
+      </article>
+    `;
+  }).join("");
 }
 
 function getRecommendationDestination(item, pageResults) {
@@ -2419,11 +2192,6 @@ function getSolutionText(item) {
 
   if (title.includes("title")) return `Add a clear, specific title that immediately tells the visitor what the page or product is about.${shopifyHint}`;
   if (title.includes("meta description")) return `Write a strong meta description that explains the value clearly and encourages clicks from search results.${shopifyHint}`;
-  if (title.includes("contact page")) return `Create a dedicated Contact page or highly visible Contact section and link it clearly from the header or footer so visitors can reach support without friction.${shopifyHint}`;
-  if (title.includes("contact details")) return `Show real contact details such as an email address, phone number, or business address in easy-to-find places like the footer and Contact page.${shopifyHint}`;
-  if (title.includes("contact form")) return `Add a clear contact form with name, email, and message fields so hesitant buyers can ask pre-purchase questions quickly.${shopifyHint}`;
-  if (title.includes("faq page") || title.includes("faq section")) return `Create an FAQ page or FAQ section that answers common buying, shipping, returns, sizing, and support questions before users leave to search elsewhere.${shopifyHint}`;
-  if (title.includes("about us")) return `Create an About Us / brand story page that explains who you are, why the brand exists, and why shoppers should trust the business.${shopifyHint}`;
   if (title.includes("contact") || title.includes("support")) return `Make contact or support options easy to find, ideally in the header, footer, cart, or product area.${shopifyHint}`;
   if (title.includes("policy") || title.includes("returns") || title.includes("refund") || title.includes("shipping")) return `Show shipping, returns, and policy information earlier and more clearly to reduce purchase hesitation.${shopifyHint}`;
   if (title.includes("search")) return `Add a visible search function so visitors can quickly find products or information.${shopifyHint}`;
@@ -2640,6 +2408,239 @@ function renderPageBreakdown(pageResults) {
   }).join("");
 }
 
+
+async function auditSiteRequirementChecks({ homeUrl, pageResults = [], discovered = {} }) {
+  const baseUrl = String(homeUrl || pageResults.find((page) => page.type === "home")?.url || pageResults[0]?.url || "").trim();
+  if (!baseUrl) return { inspectedCount: 0, checks: [] };
+
+  const candidateMap = new Map();
+  const addCandidate = (url, reason = "") => {
+    const normalized = normalizeDiscoveredUrl(url, baseUrl);
+    if (!normalized) return;
+    if (safeHostname(normalized) !== safeHostname(baseUrl)) return;
+    if (!candidateMap.has(normalized)) candidateMap.set(normalized, { url: normalized, reasons: [] });
+    if (reason) candidateMap.get(normalized).reasons.push(reason);
+  };
+
+  addCandidate(baseUrl, "home");
+  pageResults.forEach((page) => addCandidate(page.url, page.type || "configured"));
+  (discovered?.products || []).forEach((url) => addCandidate(url, "discovered"));
+  (discovered?.categories || []).forEach((url) => addCandidate(url, "discovered"));
+
+  [
+    "/contact", "/contact-us", "/pages/contact", "/pages/contact-us", "/support", "/help", "/customer-service",
+    "/faq", "/faqs", "/frequently-asked-questions", "/help-center", "/questions",
+    "/about", "/about-us", "/our-story", "/our-brand", "/pages/about", "/pages/about-us", "/pages/our-story"
+  ].forEach((path) => addCandidate(path, "likely required page"));
+
+  const homeFetch = await fetchPageHtml(baseUrl);
+  if (homeFetch?.ok && homeFetch.html) {
+    const homeDoc = parseHtmlDocument(homeFetch.html);
+    extractRequirementLinks(homeDoc, baseUrl).forEach((url) => addCandidate(url, "linked from home"));
+  }
+
+  const rankedCandidates = [...candidateMap.values()]
+    .sort((a, b) => rankRequirementCandidate(b.url, b.reasons) - rankRequirementCandidate(a.url, a.reasons))
+    .slice(0, 14);
+
+  const inspectedPages = (await mapWithConcurrency(rankedCandidates, 3, async (candidate) => {
+    const fetchResult = await fetchPageHtml(candidate.url);
+    if (!fetchResult?.ok || !fetchResult.html) return null;
+    return inspectRequirementPage(fetchResult, candidate.reasons);
+  })).filter(Boolean);
+
+  return {
+    inspectedCount: inspectedPages.length,
+    checks: buildSiteRequirementCheckResults(inspectedPages)
+  };
+}
+
+function parseHtmlDocument(html) {
+  return new DOMParser().parseFromString(String(html || ""), "text/html");
+}
+
+function extractRequirementLinks(doc, baseUrl) {
+  const links = [];
+  [...doc.querySelectorAll("a[href]")].forEach((anchor) => {
+    const href = anchor.getAttribute("href") || "";
+    const text = `${anchor.textContent || ""} ${anchor.getAttribute("aria-label") || ""}`.toLowerCase();
+    if (!/(contact|support|help|faq|question|about|story|brand)/i.test(`${href} ${text}`)) return;
+    const normalized = normalizeDiscoveredUrl(href, baseUrl);
+    if (normalized) links.push(normalized);
+  });
+  return [...new Set(links)];
+}
+
+function rankRequirementCandidate(url, reasons = []) {
+  const value = `${url} ${(reasons || []).join(" ")}`.toLowerCase();
+  let score = 0;
+  if (/contact|support|help|customer-service/.test(value)) score += 7;
+  if (/faq|question/.test(value)) score += 7;
+  if (/about|story|brand/.test(value)) score += 7;
+  if (/home/.test(value)) score += 2;
+  return score;
+}
+
+function inspectRequirementPage(fetchResult, reasons = []) {
+  const doc = parseHtmlDocument(fetchResult.html);
+  const text = (doc.body?.innerText || "").replace(/\s+/g, " ").trim();
+  const lowerText = text.toLowerCase();
+  const title = getDocumentTitle(doc).toLowerCase();
+  const heading = (doc.querySelector("h1")?.textContent || "").trim().toLowerCase();
+  const url = String(fetchResult.url || fetchResult.finalUrl || "").trim();
+  const structuredData = extractStructuredData(doc);
+  const detailsBlocks = doc.querySelectorAll("details").length;
+  const addressNode = !!doc.querySelector("address");
+  const mailto = !!doc.querySelector('a[href^="mailto:"]');
+  const tel = !!doc.querySelector('a[href^="tel:"]');
+  const emailPattern = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(text);
+  const phonePattern = /(?:\+?\d[\d\s().-]{6,}\d)/.test(text);
+  const contactForms = [...doc.querySelectorAll("form")].filter((form) => {
+    const formText = `${form.textContent || ""} ${form.getAttribute("action") || ""}`.toLowerCase();
+    const hasField = form.querySelector("input, textarea, select");
+    return !!hasField && /(contact|message|support|name|email)/.test(formText);
+  });
+  const faqSignals = doc.querySelectorAll('[class*="faq" i], [id*="faq" i], [itemtype*="FAQPage" i], [itemtype*="Question" i]').length;
+  const aboutSignals = /(about|our story|our brand|our mission|who we are|our journey)/.test(`${title} ${heading} ${url} ${lowerText.slice(0, 2500)}`);
+  const contactSignals = /(contact|support|help center|customer service|get in touch)/.test(`${title} ${heading} ${url} ${lowerText.slice(0, 2200)}`);
+  const faqPageSignals = /(faq|frequently asked questions|common questions)/.test(`${title} ${heading} ${url}`) || faqSignals > 0 || structuredData.some((item) => (item.types || []).some((type) => /FAQPage|Question/i.test(type)));
+
+  return {
+    url,
+    label: buildRequirementPageLabel(url, title || heading || fetchResult.url || "Detected page"),
+    reasons,
+    hasContactPageSignal: contactSignals,
+    hasContactDetails: mailto || tel || addressNode || emailPattern || phonePattern,
+    hasContactForm: contactForms.length > 0,
+    hasFaqSignal: faqPageSignals || (detailsBlocks >= 2 && /\?/.test(text)),
+    hasAboutSignal: aboutSignals,
+    evidence: {
+      contact: contactSignals ? summarizeRequirementEvidence(title, heading, url, [mailto && "mailto link", tel && "telephone link", addressNode && "address block"].filter(Boolean)) : "",
+      contactDetails: summarizeRequirementEvidence(title, heading, url, [mailto && "mailto link", tel && "telephone link", addressNode && "address block", emailPattern && "email pattern", phonePattern && "phone pattern"].filter(Boolean)),
+      contactForm: contactForms.length ? summarizeRequirementEvidence(title, heading, url, [`${contactForms.length} form${contactForms.length === 1 ? "" : "s"}`]) : "",
+      faq: (faqPageSignals || detailsBlocks >= 2) ? summarizeRequirementEvidence(title, heading, url, [faqSignals ? `${faqSignals} FAQ signal${faqSignals === 1 ? "" : "s"}` : "", detailsBlocks >= 2 ? `${detailsBlocks} expandable sections` : ""].filter(Boolean)) : "",
+      about: aboutSignals ? summarizeRequirementEvidence(title, heading, url, []) : ""
+    }
+  };
+}
+
+function summarizeRequirementEvidence(title, heading, url, markers = []) {
+  const parts = [];
+  if (title) parts.push(`title: ${truncateText(title, 80)}`);
+  if (heading && heading !== title) parts.push(`heading: ${truncateText(heading, 80)}`);
+  if (markers.length) parts.push(markers.join(", "));
+  if (url) parts.push(truncateText(url, 120));
+  return parts.join(" · ");
+}
+
+function buildRequirementPageLabel(url, fallback) {
+  const pathname = safePathname(url);
+  if (/contact|support|help|customer-service/i.test(pathname)) return "Detected contact area";
+  if (/faq|question/i.test(pathname)) return "Detected FAQ area";
+  if (/about|story|brand/i.test(pathname)) return "Detected About Us area";
+  return truncateText(fallback || url || "Detected page", 70);
+}
+
+function buildSiteRequirementCheckResults(inspectedPages) {
+  return [
+    createRequirementCheck({
+      id: "contact-page",
+      label: "Contact page or support page exists",
+      summary: "The analyzer looks for a dedicated contact or support destination.",
+      matchedPages: inspectedPages.filter((page) => page.hasContactPageSignal),
+      failRecommendation: "Create a dedicated Contact page or Help/Support page and link it clearly from the header or footer."
+    }),
+    createRequirementCheck({
+      id: "contact-details",
+      label: "Contact details are visible",
+      summary: "The analyzer checks for email, phone, address, or similar visible contact information.",
+      matchedPages: inspectedPages.filter((page) => page.hasContactDetails),
+      failRecommendation: "Add clear contact details such as email, phone number, address, or business contact information."
+    }),
+    createRequirementCheck({
+      id: "contact-form",
+      label: "Contact form is available",
+      summary: "The analyzer checks for a usable contact form on a contact or support area.",
+      matchedPages: inspectedPages.filter((page) => page.hasContactForm),
+      failRecommendation: "Add a contact form so visitors can easily reach the business without leaving the site."
+    }),
+    createRequirementCheck({
+      id: "faq",
+      label: "FAQ page or FAQ section exists",
+      summary: "The analyzer looks for FAQ pages, FAQ sections, or question-based expandable content.",
+      matchedPages: inspectedPages.filter((page) => page.hasFaqSignal),
+      failRecommendation: "Create an FAQ page or add an FAQ section that answers the most common customer questions."
+    }),
+    createRequirementCheck({
+      id: "about",
+      label: "About Us page exists",
+      summary: "The analyzer looks for an About Us, Our Story, or brand-story page.",
+      matchedPages: inspectedPages.filter((page) => page.hasAboutSignal),
+      failRecommendation: "Create an About Us page that explains who the brand is, what it stands for, and why customers should trust it."
+    })
+  ];
+}
+
+function createRequirementCheck({ id, label, summary, matchedPages = [], failRecommendation }) {
+  const uniquePages = dedupeRequirementPages(matchedPages);
+  const passed = uniquePages.length > 0;
+  return {
+    id,
+    label,
+    summary,
+    status: passed ? "Pass" : "Fail",
+    passed,
+    matchedPages: uniquePages,
+    evidence: passed
+      ? `Detected on ${uniquePages.length} page${uniquePages.length === 1 ? "" : "s"}: ${uniquePages.map((page) => page.evidenceText).filter(Boolean).slice(0, 2).join(" | ") || uniquePages[0].url}`
+      : "No strong automatic signal was found for this requirement on the inspected pages.",
+    recommendation: passed ? "No action required unless you want to improve visibility even more." : failRecommendation
+  };
+}
+
+function dedupeRequirementPages(items) {
+  const seen = new Set();
+  return (items || []).map((page) => ({
+    url: page.url,
+    label: page.label,
+    evidenceText: pickRequirementEvidenceText(page)
+  })).filter((page) => {
+    if (!page.url || seen.has(page.url)) return false;
+    seen.add(page.url);
+    return true;
+  });
+}
+
+function pickRequirementEvidenceText(page) {
+  if (page.hasContactForm && page.evidence?.contactForm) return page.evidence.contactForm;
+  if (page.hasContactDetails && page.evidence?.contactDetails) return page.evidence.contactDetails;
+  if (page.hasFaqSignal && page.evidence?.faq) return page.evidence.faq;
+  if (page.hasAboutSignal && page.evidence?.about) return page.evidence.about;
+  if (page.hasContactPageSignal && page.evidence?.contact) return page.evidence.contact;
+  return page.url || "";
+}
+
+function buildSiteRequirementRecommendations(siteRequirementChecks) {
+  const checks = Array.isArray(siteRequirementChecks?.checks) ? siteRequirementChecks.checks : [];
+  return checks.filter((item) => !item.passed).map((item) => ({
+    title: item.label,
+    detail: item.recommendation,
+    priority: 9,
+    impactLabel: "High",
+    page: "general",
+    pageLabel: "General",
+    type: "automatic",
+    sourceLabel: "Required page audit",
+    confidence: "Medium",
+    evidence: item.evidence,
+    url: ""
+  }));
+}
+
+function safePathname(value) {
+  try { return new URL(value).pathname.toLowerCase(); } catch (error) { return ""; }
+}
+
 function buildInspectionSummary(pageResults) {
   const pageCount = pageResults.length;
   const fetchedPages = pageResults.filter((page) => page.fetchStatus?.startsWith("Fetched")).length;
@@ -2677,9 +2678,6 @@ function explainRuleFailure(ruleDef, pageType, context) {
     review: "No strong review or rating signal was found in page text, structured data, or reachable assets.",
     shipping: "Shipping or returns reassurance was not clearly found in the parsed page content.",
     faq: "No FAQ-style content was found in the parsed text or structured data.",
-    about: "No strong About Us or brand story signal was confirmed from the analyzed storefront content.",
-    form: "No contact-style form could be confirmed from the analyzed storefront content.",
-    detail: "No real contact details such as email, phone, or address were confirmed.",
     price: "A price pattern was not confidently detected in text or structured data.",
     cart: "The expected cart or checkout signal was not confidently detected in the parsed page content."
   };
@@ -2724,7 +2722,6 @@ function buildFallbackAnalysisContext(doc, pageUrl) {
     domStats: {},
     commerceSignals: { stateSnippets: [], currencies: [], productHandles: [], reviewMentions: 0, trustMentions: 0, shippingMentions: 0 },
     platformApiSignals: { badges: [], urlHints: [], score: 0, assetCount: 0 },
-    siteEssentials: buildEmptySiteEssentials(pageUrl),
     reliability: { score: 18, label: "Low" },
     assetText: "",
     inlineText: "",
@@ -2749,7 +2746,6 @@ async function buildAnalysisContext(doc, html, pageUrl) {
   const commerceSignals = extractCommerceSignals(doc, html, structuredData, inlineSignals, pageUrl);
   const linkedResources = await inspectLinkedResources(doc, pageUrl);
   const platformApiSignals = await inspectPlatformApiSignals(pageUrl, html, structuredData);
-  const siteEssentials = await inspectSiteEssentials(doc, html, pageUrl, structuredData);
   const domStats = collectDomStats(doc, structuredData);
   const jsonLdText = structuredData.map((item) => item.text).join(" ");
   const assetText = [
@@ -2796,11 +2792,6 @@ async function buildAnalysisContext(doc, html, pageUrl) {
     domStats.searchInputs ? "Search input" : "",
     domStats.ctaCount ? "CTA/button" : "",
     domStats.forms ? "Form" : "",
-    siteEssentials.contactPage.exists ? "Contact page" : "",
-    siteEssentials.contactDetails.exists ? "Contact details" : "",
-    siteEssentials.contactForm.exists ? "Contact form" : "",
-    siteEssentials.faqPageOrSection.exists ? "FAQ page/section" : "",
-    siteEssentials.aboutPage.exists ? "About page" : "",
     domStats.productForms ? "Product form" : "",
     commerceSignals.priceSignals ? "Price signal" : "",
     commerceSignals.variantSignals ? "Variant signal" : "",
@@ -2860,7 +2851,6 @@ async function buildAnalysisContext(doc, html, pageUrl) {
     domStats,
     commerceSignals,
     platformApiSignals,
-    siteEssentials,
     reliability: {
       score: reliabilityScore,
       label: reliabilityScore >= 80 ? "High" : reliabilityScore >= 50 ? "Medium" : "Low"
@@ -3394,6 +3384,15 @@ function downloadPdfReport(report) {
     lines.push(`Solution: ${getSolutionText(item)}`);
     lines.push("");
   });
+  if (Array.isArray(report.siteRequirementChecks?.checks) && report.siteRequirementChecks.checks.length) {
+    lines.push("Required trust and contact checks:");
+    report.siteRequirementChecks.checks.forEach((item) => {
+      lines.push(`- ${item.label}: ${item.status}`);
+      lines.push(`  Result: ${item.evidence}`);
+      lines.push(`  Recommendation: ${item.recommendation}`);
+    });
+    lines.push("");
+  }
   let y = 20;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(18);
