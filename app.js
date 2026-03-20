@@ -2553,6 +2553,15 @@ function buildRequirementCandidates(type, baseUrl, pageResults) {
   return uniqueArray([...fromLinks, ...normalizedCommon]);
 }
 
+function countRegexMatches(value, regex) {
+  const source = String(value || "");
+  if (!source || !(regex instanceof RegExp)) return 0;
+  const flags = regex.flags.includes("g") ? regex.flags : `${regex.flags}g`;
+  const matcher = new RegExp(regex.source, flags);
+  const matches = source.match(matcher);
+  return matches ? matches.length : 0;
+}
+
 function buildRequiredElementSignals(context) {
   const pageUrl = String(context?.url || "");
   const title = `${context?.title || ""} ${context?.metaDescription || ""} ${context?.ogTitle || ""} ${context?.ogDescription || ""}`.toLowerCase();
@@ -2571,11 +2580,17 @@ function buildRequiredElementSignals(context) {
   const contactForm = formCount > 0
     && ((context?.domStats?.textareaCount || 0) > 0 || (context?.domStats?.emailInputs || 0) > 0)
     && (dedicatedContactPage || contactIntentText);
-  const faqPageOrSection = !!context?.domStats?.faqBlocks
+  const faqHeadingCount = countRegexMatches(rawText, /(?:^|\n|\r|\s)(faq|frequently asked questions|common questions)(?:\s|$)/gi);
+  const questionLikePattern = /(how|what|when|where|why|do|does|can|is|are|will|should)\s+[^.?!]{6,}\?/gi;
+  const questionLikeCount = countRegexMatches(text, questionLikePattern);
+  const accordionCount = context?.domStats?.accordions || 0;
+  const faqSectionOnPage = !!context?.domStats?.faqBlocks
     || hasStructuredDataType(context, "FAQPage", "Question")
-    || /\bfaq\b|frequently asked questions|common questions/i.test(rawText)
-    || /\/faq(?:[-/]|$)|\/faqs(?:[-/]|$)/i.test(pageUrl)
-    || /\bfaq\b|frequently asked questions/i.test(linkText);
+    || (faqHeadingCount >= 1 && questionLikeCount >= 2)
+    || (faqHeadingCount >= 1 && accordionCount >= 2);
+  const dedicatedFaqPage = /\/faq(?:[-/]|$)|\/faqs(?:[-/]|$)|\/help-center(?:[-/]|$)|\/frequently-asked(?:[-/]|$)/i.test(pageUrl)
+    || (/\bfaq\b|frequently asked questions|common questions/i.test(title) && !/home|welcome|index/i.test(title));
+  const faqPageOrSection = faqSectionOnPage || dedicatedFaqPage;
   const aboutPage = /\/about(?:[-/]|$)|\/our-story(?:[-/]|$)|\/about-us(?:[-/]|$)/i.test(pageUrl)
     || /\babout us\b|\bour story\b|\bour mission\b|\bwho we are\b/.test(title);
 
@@ -2594,7 +2609,11 @@ function buildRequiredElementSignals(context) {
       : "No dedicated contact form was detected.",
     faqPageOrSection,
     faqEvidence: faqPageOrSection
-      ? (hasStructuredDataType(context, "FAQPage", "Question") ? "Detected FAQ schema or question markup in the inspected page." : "Detected FAQ wording, FAQ blocks, or an FAQ page path.")
+      ? (dedicatedFaqPage
+          ? `Detected a likely dedicated FAQ page at ${shortDisplayUrl(pageUrl)}.`
+          : hasStructuredDataType(context, "FAQPage", "Question")
+            ? "Detected FAQ schema or question markup in the inspected page."
+            : "Detected a likely on-page FAQ section based on headings, questions, or accordion-style content.")
       : "No FAQ page or FAQ section was detected.",
     aboutPage,
     aboutEvidence: aboutPage
