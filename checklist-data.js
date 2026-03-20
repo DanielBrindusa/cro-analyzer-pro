@@ -9,7 +9,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-every-page-has-a-cta-even-404-error-pages-result-page-with-0-results-b",
@@ -33,7 +33,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-cookie-notification-bar-can-be-easily-closed-or-approved-under-2-secon",
@@ -69,7 +69,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-items-that-aren-t-clickable-do-not-have-characteristics-that-suggest-t",
@@ -81,7 +81,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-there-is-sufficient-space-between-action-targets-buttons-forms-to-prev",
@@ -93,7 +93,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-the-store-offers-upsell-opportunities-between-the-checkout-page-and-th",
@@ -141,7 +141,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-the-home-page-promotes-site-wide-offers-at-the-top-of-the-page-e-g-fre",
@@ -177,7 +177,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-good-navigational-feedback-is-provided-e-g-showing-active-state-of-whe",
@@ -189,7 +189,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-category-labels-accurately-describe-the-information-in-the-category",
@@ -201,7 +201,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-navigation-items-are-ordered-in-the-most-logical-or-task-oriented-mann",
@@ -213,7 +213,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-main-navigation-doesn-t-include-unnecessary-links-e-g-privacy-policy-r",
@@ -225,7 +225,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-store-uses-sticky-navigation-so-the-categories-first-page-search-and-c",
@@ -237,7 +237,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-the-home-page-contains-a-prominent-search-box-near-the-top-or-top-righ",
@@ -261,7 +261,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-auto-suggest-searches-through-categories-and-products",
@@ -273,7 +273,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-the-search-results-page-shows-the-user-what-was-searched-for-it-is-eas",
@@ -321,7 +321,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-the-search-engine-includes-templates-examples-or-hints-on-how-it-can-b",
@@ -393,7 +393,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-cart-widget-is-easibly-accesible-on-every-page-in-the-top-right-corner",
@@ -405,7 +405,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-mini-cart-widget-includes-the-total-price-total-discount-number-of-ite",
@@ -429,7 +429,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-a-link-to-both-the-basket-and-checkout-is-clearly-visible-on-the-mini-",
@@ -501,7 +501,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "general-footer-shows-trust-icons-seal-badges-e-g-verified-by-norton-along-with",
@@ -537,7 +537,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "home-the-home-page-promotes-site-wide-offers-on-top-of-the-page-e-g-free-sh",
@@ -561,7 +561,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "home-once-you-land-on-the-homepage-you-know-the-main-products-that-the-stor",
@@ -573,7 +573,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "home-the-home-page-follows-a-clear-straightfowrard-visual-hierarchy",
@@ -585,7 +585,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "home-the-value-proposition-is-clearly-stated-on-the-home-page-e-g-with-a-ta",
@@ -609,7 +609,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "home-the-home-page-contains-one-or-two-e-g-shop-for-men-shop-for-women-visu",
@@ -657,7 +657,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "home-the-store-uses-special-category-pages-best-sellers-new-sale-30-off-etc",
@@ -669,7 +669,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "home-there-is-a-short-list-of-the-most-important-products-supplemented-with",
@@ -681,7 +681,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "home-the-home-page-contains-an-option-for-customers-to-contact-the-store-e-",
@@ -717,7 +717,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "home-the-home-page-contains-general-customer-reviews-or-product-specifics-w",
@@ -801,7 +801,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-the-sorting-feature-is-shown-in-the-top-right-corner-above-the-product",
@@ -813,7 +813,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-category-page-has-clear-and-understandable-sub-category-names",
@@ -825,7 +825,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-category-page-uses-relevant-category-page-design-grid-view-when-images",
@@ -837,7 +837,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-shows-exact-number-of-products-available-on-each-page-either-if-the-pa",
@@ -849,7 +849,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-a-page-description-section-cca-400-words-is-on-top-visually-90-hidden-",
@@ -861,7 +861,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-you-stay-at-the-same-vertical-position-if-you-go-to-product-page-and-t",
@@ -873,7 +873,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-relevant-3-4-products-are-shown-per-row",
@@ -885,7 +885,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-trending-top-rated-and-best-selling-items-are-shown-on-top-of-each-cat",
@@ -897,7 +897,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 5,
     "defaultEvaluation": "Can be Improved",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-additional-product-photos-are-shown-on-mouse-hover",
@@ -909,7 +909,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-consistent-style-of-images-is-used-for-better-scannability-type-of-ima",
@@ -921,7 +921,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-consistent-size-of-product-cards-is-used-for-better-scannability",
@@ -933,7 +933,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-the-category-page-clearly-shows-which-product-variants-size-color-are-",
@@ -945,7 +945,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 5,
     "defaultEvaluation": "Can be Improved",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-cta-button-is-shown-to-motivate-users-to-go-look-at-the-product-page-i",
@@ -957,7 +957,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 5,
     "defaultEvaluation": "Can be Improved",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-scarcity-on-products-that-are-limited-in-stock-is-shown-only-1-left",
@@ -969,7 +969,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-items-out-of-stock-are-shown-you-just-missed-it-so-the-scarcity-above-",
@@ -981,7 +981,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-badges-on-product-image-thumbnails-are-shown-e-g-fast-delivery-best-se",
@@ -993,7 +993,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-category-page-offers-easy-to-understand-and-useful-especially-on-mobil",
@@ -1005,7 +1005,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-the-filters-are-prominent-enough-relevant-only-for-stores-where-users-",
@@ -1017,7 +1017,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-the-most-popular-filters-are-shown-at-the-top-of-the-filters",
@@ -1029,7 +1029,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-only-relevant-filters-are-shown-for-each-category-e-g-screen-size-for-",
@@ -1041,7 +1041,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-it-is-clearly-visible-especially-on-mobile-that-filters-are-applied-ho",
@@ -1053,7 +1053,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-users-can-select-multiple-filters-at-once",
@@ -1065,7 +1065,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-filters-are-shown-in-a-standard-position-on-the-left-or-on-top-below-t",
@@ -1077,7 +1077,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-when-a-filter-is-selected-the-category-page-auto-updates-in-real-time-",
@@ -1089,7 +1089,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-product-filters-are-sticky-and-can-be-easily-accessed-at-any-given-mom",
@@ -1101,7 +1101,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "category-relevant-selectors-are-used-for-different-types-of-filters-e-g-color-s",
@@ -1113,7 +1113,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-sticky-navigation-with-product-name-product-image-product-page-section",
@@ -1149,7 +1149,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-a-customer-can-give-their-email-address-if-the-product-is-currently-no",
@@ -1173,7 +1173,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-product-titles-are-descriptive",
@@ -1257,7 +1257,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-the-main-product-photo-allows-a-user-to-zoom-in-easily-especially-on-m",
@@ -1293,7 +1293,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-the-product-gallery-contains-product-videos",
@@ -1425,7 +1425,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-product-descriptions-mention-the-size-of-the-model-and-the-size-of-the",
@@ -1437,7 +1437,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-interactive-selectors-are-used-for-quantity-selection-instead-of-dropd",
@@ -1545,7 +1545,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-if-free-shipping-is-offered-it-s-highlighted-near-the-main-cta",
@@ -1617,7 +1617,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-there-is-an-option-for-a-payment-with-installments-e-g-klarna-afterpay",
@@ -1629,7 +1629,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-product-page-highlights-logos-of-news-sites-blogs-celebrities-where-th",
@@ -1653,7 +1653,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-customer-reviews-visually-stand-out-from-other-content-ideally-on-a-sl",
@@ -1689,7 +1689,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-product-page-contains-the-number-of-customers-this-week-month-all-time",
@@ -1725,7 +1725,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-clear-quantity-discounts-are-offered-near-the-main-cta-1x-24-99-piece-",
@@ -1737,7 +1737,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-relevant-cross-sell-up-sell-products-are-offered",
@@ -1821,7 +1821,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-the-product-description-is-easy-to-read-font-size-contrast-single-colu",
@@ -1833,7 +1833,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-product-information-structure-is-easy-to-scan-grouped-information-bull",
@@ -1845,7 +1845,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-the-sections-of-the-page-general-technical-info-are-grouped-together-i",
@@ -1881,7 +1881,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-product-page-contains-customer-faqs-for-each-specific-product-as-well-",
@@ -1905,7 +1905,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-product-page-offers-product-comparisons",
@@ -1929,7 +1929,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-product-page-contains-embedded-reviews-or-screenshots-from-social-netw",
@@ -1941,7 +1941,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "product-the-personalization-page-doesn-t-contain-any-designs-to-choose-from-so",
@@ -1953,7 +1953,7 @@ window.CRO_CHECKLIST = [
     "cost": null,
     "priorityScore": null,
     "defaultEvaluation": "Bad",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "cart-the-overall-cart-design-is-clear-and-uncluttered",
@@ -1965,7 +1965,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "cart-urgency-triggers-are-used-your-items-are-reserved-for-10-minutes-if-yo",
@@ -1989,7 +1989,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "cart-if-the-user-already-reached-the-threshold-for-free-shipping-the-cart-p",
@@ -2013,7 +2013,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "cart-all-important-product-information-is-shown-in-the-cart-title-image-cho",
@@ -2037,7 +2037,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "cart-the-cart-allows-you-to-change-the-quantity-of-the-product-and-automati",
@@ -2085,7 +2085,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "cart-the-cart-offers-an-easy-way-to-get-in-touch-with-the-store-s-help-cent",
@@ -2133,7 +2133,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "cart-customers-can-save-products-cart-for-later-instead-of-deleting-them",
@@ -2145,7 +2145,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "cart-the-subtotal-price-is-prominent-and-placed-near-the-main-cta",
@@ -2169,7 +2169,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "cart-the-shopper-is-shown-how-much-they-will-save-on-their-entire-purchase-",
@@ -2229,7 +2229,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "cart-images-of-all-available-installment-methods-are-shown-e-g-klarna-with-",
@@ -2241,7 +2241,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "cart-a-secondary-cta-continue-shopping-button-is-available-on-the-cart-page",
@@ -2265,7 +2265,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-if-there-is-a-multi-step-checkout-it-s-clear-what-will-happen-after-yo",
@@ -2289,7 +2289,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-immediately-prior-to-commiting-to-the-purchase-the-site-shows-the-user",
@@ -2337,7 +2337,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-checkout-offers-an-easy-way-to-get-in-touch-with-the-store-s-help-cent",
@@ -2385,7 +2385,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-urgency-triggers-are-used-your-items-are-reserved-for-10-minutes-if-yo",
@@ -2397,7 +2397,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-log-in-and-registration",
@@ -2409,7 +2409,7 @@ window.CRO_CHECKLIST = [
     "cost": null,
     "priorityScore": null,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-checkout-allows-users-to-log-in-so-they-don-t-need-to-type-in-all-the-",
@@ -2421,7 +2421,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-during-registration-the-password-selection-process-is-not-overcomplica",
@@ -2433,7 +2433,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-password-recovery-is-easy",
@@ -2445,7 +2445,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-forms",
@@ -2457,7 +2457,7 @@ window.CRO_CHECKLIST = [
     "cost": null,
     "priorityScore": null,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-the-layout-of-input-fields-is-as-simple-as-possible-single-column-idea",
@@ -2469,7 +2469,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-the-checkout-page-has-the-minimum-amount-of-input-fields-needed-for-co",
@@ -2493,7 +2493,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-the-user-s-email-address-is-requested-first-so-in-case-they-leave-the-",
@@ -2517,7 +2517,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-the-checkout-page-has-an-option-to-check-the-billing-address-is-the-sa",
@@ -2553,7 +2553,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-credit-card-input-fields-are-shown-on-a-gray-background-for-higher-per",
@@ -2577,7 +2577,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-when-entering-data-into-a-number-only-input-field-e-g-post-code-phone-",
@@ -2613,7 +2613,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-optional-and-mandatory-fields-are-easily-distinguishable",
@@ -2625,7 +2625,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-if-we-are-asking-for-the-phone-number-we-must-explain-beside-below-the",
@@ -2637,7 +2637,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-checkout-is-using-a-database-of-street-addresses-so-the-user-cannot-mi",
@@ -2649,7 +2649,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-input-fields-use-inline-validation-with-a-prominent-green-red-border-a",
@@ -2661,7 +2661,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-the-error-state-of-incorrectly-filled-out-input-fields-clearly-states-",
@@ -2673,7 +2673,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-the-user-does-not-need-to-enter-the-same-information-more-than-once",
@@ -2685,7 +2685,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-checkout-uses-an-auto-complete-function-wherever-possible-e-g-when-use",
@@ -2697,7 +2697,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "checkout-if-the-user-leaves-the-checkout-and-then-returns-the-input-fields-will",
@@ -2721,7 +2721,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "thankyou-thank-you-page-clearly-states-that-the-user-successfully-completed-the",
@@ -2733,7 +2733,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "thankyou-thank-you-page-clearly-sumarizes-what-was-in-the-order",
@@ -2745,7 +2745,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "thankyou-thank-you-page-clearly-states-when-the-package-will-arrive-and-with-wh",
@@ -2757,7 +2757,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "thankyou-thank-you-page-offers-an-easy-way-for-the-user-to-get-in-touch-with-th",
@@ -2769,7 +2769,7 @@ window.CRO_CHECKLIST = [
     "cost": 1.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "thankyou-the-thank-you-page-explains-to-the-user-how-they-can-track-their-packa",
@@ -2781,7 +2781,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "thankyou-thank-you-page-offers-the-user-to-buy-additional-items-quantity-of-the",
@@ -2793,7 +2793,7 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 5.4,
     "defaultEvaluation": "Bad",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "thankyou-thank-you-page-offers-the-user-a-coupon-code-that-they-can-use-for-the",
@@ -2805,7 +2805,7 @@ window.CRO_CHECKLIST = [
     "cost": 2.0,
     "priorityScore": 0,
     "defaultEvaluation": "Not Relevant",
-    "tier": "pro"
+    "tier": "basic"
   },
   {
     "id": "thankyou-the-user-receives-a-summary-of-all-information-in-their-confirmation-e",
@@ -2817,6 +2817,6 @@ window.CRO_CHECKLIST = [
     "cost": 3.0,
     "priorityScore": 0,
     "defaultEvaluation": "Good",
-    "tier": "pro"
+    "tier": "basic"
   }
 ];
