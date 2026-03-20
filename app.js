@@ -2385,10 +2385,10 @@ async function analyzeRequiredElementsAudit(homeSeedUrl, pageResults) {
 
   const fetchedCandidateAnalyses = [];
   for (const url of uniqueArray([
-    ...candidateMap.contactPage.slice(0, 3),
+    ...candidateMap.contactPage.slice(0, 4),
     ...candidateMap.faqPageOrSection.slice(0, 3),
     ...candidateMap.aboutPage.slice(0, 3)
-  ]).slice(0, 7)) {
+  ]).slice(0, 8)) {
     if (!url) continue;
     const response = await fetchPageHtml(url);
     if (!response.ok) continue;
@@ -2401,32 +2401,90 @@ async function analyzeRequiredElementsAudit(homeSeedUrl, pageResults) {
   const extraSignals = fetchedCandidateAnalyses.map((entry) => ({
     url: entry.url,
     label: entry.label,
+    context: entry.context,
     signals: buildRequiredElementSignals(entry.context)
   }));
 
-  requirements.forEach((item) => {
-    if (item.passed) return;
-    if (item.key === "contactPage") {
-      const found = extraSignals.find((entry) => entry.signals.contactPage);
-      if (found) Object.assign(item, { passed: true, evidence: found.signals.contactPageEvidence, locations: [{ url: found.url, label: found.label }] });
+  const dedicatedContactCandidate = extraSignals.find((entry) => isDedicatedContactLikePage(entry.url, entry.context) && entry.signals.contactPage);
+  const dedicatedFaqCandidate = extraSignals.find((entry) => entry.signals.faqPageOrSection);
+  const dedicatedAboutCandidate = extraSignals.find((entry) => entry.signals.aboutPage);
+
+  const requirementIndex = new Map(requirements.map((item) => [item.key, item]));
+
+  if (dedicatedContactCandidate) {
+    requirementIndex.set("contactPage", Object.assign(requirementIndex.get("contactPage") || {}, {
+      passed: true,
+      evidence: dedicatedContactCandidate.signals.contactPageEvidence,
+      locations: [{ url: dedicatedContactCandidate.url, label: dedicatedContactCandidate.label }]
+    }));
+
+    if (dedicatedContactCandidate.signals.contactDetails) {
+      requirementIndex.set("contactDetails", Object.assign(requirementIndex.get("contactDetails") || {}, {
+        passed: true,
+        evidence: dedicatedContactCandidate.signals.contactDetailsEvidence,
+        locations: [{ url: dedicatedContactCandidate.url, label: dedicatedContactCandidate.label }]
+      }));
     }
-    if (item.key === "contactDetails") {
-      const found = extraSignals.find((entry) => entry.signals.contactDetails);
-      if (found) Object.assign(item, { passed: true, evidence: found.signals.contactDetailsEvidence, locations: [{ url: found.url, label: found.label }] });
+
+    if (dedicatedContactCandidate.signals.contactForm) {
+      requirementIndex.set("contactForm", Object.assign(requirementIndex.get("contactForm") || {}, {
+        passed: true,
+        evidence: dedicatedContactCandidate.signals.contactFormEvidence,
+        locations: [{ url: dedicatedContactCandidate.url, label: dedicatedContactCandidate.label }]
+      }));
     }
-    if (item.key === "contactForm") {
-      const found = extraSignals.find((entry) => entry.signals.contactForm);
-      if (found) Object.assign(item, { passed: true, evidence: found.signals.contactFormEvidence, locations: [{ url: found.url, label: found.label }] });
+  }
+
+  if (!requirementIndex.get("contactPage")?.passed) {
+    const found = extraSignals.find((entry) => isDedicatedContactLikePage(entry.url, entry.context) && entry.signals.contactPage);
+    if (found) {
+      Object.assign(requirementIndex.get("contactPage") || {}, {
+        passed: true,
+        evidence: found.signals.contactPageEvidence,
+        locations: [{ url: found.url, label: found.label }]
+      });
     }
-    if (item.key === "faqPageOrSection") {
-      const found = extraSignals.find((entry) => entry.signals.faqPageOrSection);
-      if (found) Object.assign(item, { passed: true, evidence: found.signals.faqEvidence, locations: [{ url: found.url, label: found.label }] });
+  }
+
+  if (!requirementIndex.get("contactDetails")?.passed) {
+    const found = extraSignals.find((entry) => isDedicatedContactLikePage(entry.url, entry.context) && entry.signals.contactDetails)
+      || extraSignals.find((entry) => entry.signals.contactDetails);
+    if (found) {
+      Object.assign(requirementIndex.get("contactDetails") || {}, {
+        passed: true,
+        evidence: found.signals.contactDetailsEvidence,
+        locations: [{ url: found.url, label: found.label }]
+      });
     }
-    if (item.key === "aboutPage") {
-      const found = extraSignals.find((entry) => entry.signals.aboutPage);
-      if (found) Object.assign(item, { passed: true, evidence: found.signals.aboutEvidence, locations: [{ url: found.url, label: found.label }] });
+  }
+
+  if (!requirementIndex.get("contactForm")?.passed) {
+    const found = extraSignals.find((entry) => isDedicatedContactLikePage(entry.url, entry.context) && entry.signals.contactForm)
+      || extraSignals.find((entry) => entry.signals.contactForm);
+    if (found) {
+      Object.assign(requirementIndex.get("contactForm") || {}, {
+        passed: true,
+        evidence: found.signals.contactFormEvidence,
+        locations: [{ url: found.url, label: found.label }]
+      });
     }
-  });
+  }
+
+  if (!requirementIndex.get("faqPageOrSection")?.passed && dedicatedFaqCandidate) {
+    Object.assign(requirementIndex.get("faqPageOrSection") || {}, {
+      passed: true,
+      evidence: dedicatedFaqCandidate.signals.faqEvidence,
+      locations: [{ url: dedicatedFaqCandidate.url, label: dedicatedFaqCandidate.label }]
+    });
+  }
+
+  if (!requirementIndex.get("aboutPage")?.passed && dedicatedAboutCandidate) {
+    Object.assign(requirementIndex.get("aboutPage") || {}, {
+      passed: true,
+      evidence: dedicatedAboutCandidate.signals.aboutEvidence,
+      locations: [{ url: dedicatedAboutCandidate.url, label: dedicatedAboutCandidate.label }]
+    });
+  }
 
   const recommendations = requirements
     .filter((item) => !item.passed)
@@ -2500,23 +2558,31 @@ function buildRequiredElementSignals(context) {
   const title = `${context?.title || ""} ${context?.metaDescription || ""} ${context?.ogTitle || ""} ${context?.ogDescription || ""}`.toLowerCase();
   const text = String(context?.signalText || "");
   const rawText = `${title} ${text}`;
-  const links = context?.pageLinks || [];
+  const linkText = (context?.pageLinks || []).map((link) => `${link.text || ""} ${link.url || ""}`).join(" ").toLowerCase();
   const hasMailto = /mailto:/i.test(rawText);
   const hasTel = /tel:/i.test(rawText);
   const hasEmail = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(rawText);
   const hasPhone = /(?:\+?\d[\d\s().-]{6,}\d)/.test(rawText);
-  const hasAddress = !!context?.domStats?.addressCount || /(address|street|st\.?|road|rd\.?|avenue|ave\.?|boulevard|blvd\.?|timisoara|bucharest|romania|zip|postal code)/i.test(rawText);
+  const hasAddress = !!context?.domStats?.addressCount || /\b(address|street|st\.?|road|rd\.?|avenue|ave\.?|boulevard|blvd\.?|timisoara|bucharest|romania|zip|postal code)\b/i.test(rawText);
   const hasContactDetails = hasMailto || hasTel || hasEmail || hasPhone || hasAddress;
-  const contactPage = /\/contact(?:[-/]|$)|\/support(?:[-/]|$)|\/help(?:[-/]|$)/i.test(pageUrl) || /contact us|customer service|get in touch/.test(title) || links.some((link) => /contact|support|help/i.test(`${link.text} ${link.url}`));
+  const dedicatedContactPage = isDedicatedContactLikePage(pageUrl, context);
   const formCount = context?.domStats?.forms || 0;
-  const contactForm = formCount > 0 && ((context?.domStats?.textareaCount || 0) > 0 || (context?.domStats?.emailInputs || 0) > 0) && (/contact|message|send|support|get in touch/i.test(rawText) || contactPage);
-  const faqPageOrSection = !!context?.domStats?.faqBlocks || hasStructuredDataType(context, "FAQPage", "Question") || /faq|frequently asked questions|common questions/i.test(rawText) || /\/faq(?:[-/]|$)|\/faqs(?:[-/]|$)/i.test(pageUrl);
-  const aboutPage = /\/about(?:[-/]|$)|\/our-story(?:[-/]|$)|\/about-us(?:[-/]|$)/i.test(pageUrl) || /about us|our story|our mission|who we are/.test(title);
+  const contactIntentText = /contact|message|send message|customer service|support|get in touch|reach us/i.test(rawText);
+  const contactForm = formCount > 0
+    && ((context?.domStats?.textareaCount || 0) > 0 || (context?.domStats?.emailInputs || 0) > 0)
+    && (dedicatedContactPage || contactIntentText);
+  const faqPageOrSection = !!context?.domStats?.faqBlocks
+    || hasStructuredDataType(context, "FAQPage", "Question")
+    || /\bfaq\b|frequently asked questions|common questions/i.test(rawText)
+    || /\/faq(?:[-/]|$)|\/faqs(?:[-/]|$)/i.test(pageUrl)
+    || /\bfaq\b|frequently asked questions/i.test(linkText);
+  const aboutPage = /\/about(?:[-/]|$)|\/our-story(?:[-/]|$)|\/about-us(?:[-/]|$)/i.test(pageUrl)
+    || /\babout us\b|\bour story\b|\bour mission\b|\bwho we are\b/.test(title);
 
   return {
-    contactPage,
-    contactPageEvidence: contactPage
-      ? (pageUrl && /contact|support|help/i.test(pageUrl) ? `Detected a likely contact/support page at ${shortDisplayUrl(pageUrl)}.` : "Contact/support page wording or navigation was detected.")
+    contactPage: dedicatedContactPage,
+    contactPageEvidence: dedicatedContactPage
+      ? `Detected a likely dedicated contact/support page at ${shortDisplayUrl(pageUrl)}.`
       : "No dedicated contact/support page signal was detected.",
     contactDetails: hasContactDetails,
     contactDetailsEvidence: hasContactDetails
@@ -2552,6 +2618,16 @@ function inferRequirementLabelFromUrl(url) {
   if (/faq|questions/i.test(url)) return "Detected FAQ page";
   if (/about|our-story/i.test(url)) return "Detected About page";
   return shortDisplayUrl(url);
+}
+
+function isDedicatedContactLikePage(url, context) {
+  const pageUrl = String(url || context?.url || "").toLowerCase();
+  const title = `${context?.title || ""} ${context?.metaDescription || ""} ${context?.ogTitle || ""} ${context?.ogDescription || ""}`.toLowerCase();
+  const pathnameMatch = pageUrl.match(/^https?:\/\/[^/]+(\/[^?#]*)/i);
+  const pathname = pathnameMatch ? pathnameMatch[1] : pageUrl;
+  const urlLooksDedicated = /\/(pages\/)?contact(?:-us)?(?:[/?#]|$)|\/(pages\/)?support(?:[/?#]|$)|\/(pages\/)?help(?:[/?#]|$)|\/(pages\/)?customer-service(?:[/?#]|$)/i.test(pathname);
+  const titleLooksDedicated = /\bcontact us\b|\bget in touch\b|\bcustomer service\b|\breach us\b/.test(title);
+  return urlLooksDedicated || titleLooksDedicated;
 }
 
 function uniqueArray(items) {
