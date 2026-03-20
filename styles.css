@@ -908,3 +908,13 @@ canvas{
 .seo-mini-links{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px;}
 .seo-mini-links a{display:inline-flex;align-items:center;padding:9px 12px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:#e9eeff;text-decoration:none;font-size:13px;}
 .seo-mini-links a:hover{background:rgba(255,255,255,.09);}
+
+
+.seo-section ul {
+  margin-top: 12px;
+  padding-left: 18px;
+}
+
+.seo-section li {
+  margin-bottom: 6px;
+}
