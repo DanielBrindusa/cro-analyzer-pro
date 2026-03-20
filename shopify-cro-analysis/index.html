@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shopify CRO Analysis Tool | Audit Your Shopify Store</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico?v=3" sizes="any" />
+  <link rel="shortcut icon" href="/favicon.ico?v=3" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=3" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=3" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3" />
+  <link rel="manifest" href="/site.webmanifest?v=3" />
+  <meta name="theme-color" content="#0b1020" />
+  <meta name="description" content="Run a Shopify CRO analysis to uncover conversion issues on homepage, collection, product, and cart pages and get prioritized recommendations you can act on." />
+  <link rel="canonical" href="https://croanalyser.com/shopify-cro-analysis/" />
+  <meta property="og:title" content="Shopify CRO Analysis Tool | Audit Your Shopify Store" />
+  <meta property="og:description" content="Run a Shopify CRO analysis to uncover conversion issues on homepage, collection, product, and cart pages and get prioritized recommendations you can act on." />
+  <meta property="og:url" content="https://croanalyser.com/shopify-cro-analysis/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="CRO Analyzer Pro" />
+  <meta property="og:image" content="https://croanalyser.com/android-chrome-512x512.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Shopify CRO Analysis Tool | Audit Your Shopify Store" />
+  <meta name="twitter:description" content="Run a Shopify CRO analysis to uncover conversion issues on homepage, collection, product, and cart pages and get prioritized recommendations you can act on." />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div class="hero-copy">
+        <span class="eyebrow">Static GitHub Pages app</span>
+        <h1>Shopify CRO Analysis</h1>
+        <p class="hero-text">
+          Analyze Shopify storefront pages for CRO issues, surface optimization opportunities, and build a clearer roadmap for improving conversion rate.
+        </p>
+        <div class="hero-badges">
+          <span class="badge">Built for public ecommerce storefront audits</span>
+          <span class="badge">Useful for Shopify-focused CRO reviews</span>
+        </div>
+      </div>
+      <div class="hero-card glass">
+        <h2>What this Shopify CRO analysis can help you find</h2>
+        <ul>
+          <li>Weak value propositions and unclear CTAs</li><li>Missing trust signals, policies, or support touchpoints</li><li>Product page friction around pricing, reviews, variants, and urgency</li><li>Cart-stage issues that can hurt completion rates</li>
+        </ul>
+        <p class="small muted">
+          Because this runs only on GitHub Pages, some websites may block page fetching through browser CORS rules. In those cases, the app still gives you a structured manual review workflow.
+        </p>
+      </div>
+    </header>
+
+    <section class="glass panel ad-banner-panel" aria-label="Advertisement placement">
+      <div class="ad-banner" data-ad-slot="hero">
+        <div class="ad-copy">
+          <span class="ad-label" data-ad-part="label">Advertisement</span>
+          <p class="ad-note" data-ad-part="note">Monetization space</p>
+          <h2 class="ad-title" data-ad-part="title">Promote your CRO service, affiliate offer, or featured partner here.</h2>
+          <p class="ad-text" data-ad-part="text">This wide banner is ideal for your best monetization slot: a premium partner, your own service, an affiliate tool, or a lead-generation offer.</p>
+        </div>
+        <a class="primary-button ad-cta" data-ad-part="cta" href="#" target="_blank" rel="noopener noreferrer">Learn more</a>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <aside class="sidebar glass scroll-area">
+        <div class="section-heading">
+          <h2>Project setup</h2>
+          <p>Enter the pages you want to analyze.</p>
+        </div>
+
+        <label class="field">
+          <span>Project name</span>
+          <input id="projectName" type="text" placeholder="Company CRO Audit" />
+        </label>
+<div class="field-group">
+          <label class="field">
+            <span>Home page URL</span>
+            <input id="homeUrl" type="url" placeholder="https://example.com" />
+          </label>
+          <label class="field">
+            <span>Cart page URL</span>
+            <input id="cartUrl" type="url" placeholder="https://example.com/cart" />
+          </label>
+        </div>
+
+        <div class="product-header">
+          <div>
+            <h3>Category / collection URLs</h3>
+            <p class="small muted">Add as many category / collection URLs as you need.</p>
+          </div>
+          <button id="addCategoryUrl" class="secondary-button" type="button">Add category URL</button>
+        </div>
+        <div id="categoryUrlList" class="product-url-list"></div>
+
+        <label class="field">
+          <span>Competitor home page URL (optional)</span>
+          <input id="competitorUrl" type="url" placeholder="https://competitor-example.com" />
+        </label>
+
+        <div class="product-header">
+          <div>
+            <h3>Product URLs</h3>
+            <p class="small muted">Add as many product URLs as you need.</p>
+          </div>
+          <button id="addProductUrl" class="secondary-button" type="button">Add product URL</button>
+        </div>
+        <div id="productUrlList" class="product-url-list"></div>
+
+        <div class="field">
+          <span>Optional notes</span>
+          <textarea id="manualNotes" rows="5" placeholder="Anything you want to remember for this audit..."></textarea>
+        </div>
+
+        <div class="button-row">
+          <button id="analyzeButton" class="primary-button" type="button">Run CRO analysis</button>
+          <button id="discoverButton" class="secondary-button" type="button">Discover URLs</button>
+          <button id="exportButton" class="secondary-button" type="button">Export JSON</button>
+          <button id="exportPdfButton" class="secondary-button" type="button">Export PDF</button>
+        </div>
+
+        <div id="analysisProgress" class="progress-panel hidden" aria-live="polite">
+          <div class="progress-top">
+            <strong id="progressTitle">Preparing analysis...</strong>
+            <span id="progressPercent">0%</span>
+          </div>
+          <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="progressFill" class="progress-fill"></div>
+          </div>
+          <p id="progressStatus" class="progress-status">The app is getting your audit ready.</p>
+        </div>
+
+        <div id="discoveryPanel" class="info-panel hidden">
+          <strong>Discovered URLs</strong>
+          <div id="discoveryList" class="discovery-list"></div>
+        </div>
+
+        <section class="ad-card ad-card-sidebar" data-ad-slot="sidebar">
+          <span class="ad-label" data-ad-part="label">Advertisement</span>
+          <p class="ad-note" data-ad-part="note">Monetization space</p>
+          <h3 class="ad-title-small" data-ad-part="title">This sidebar slot works well for affiliate tools, CRO templates, or your own consultation offer.</h3>
+          <p class="ad-text-small" data-ad-part="text">Keep this one short and focused so it feels native to the audit workflow.</p>
+          <a class="secondary-button ad-cta-inline" data-ad-part="cta" href="#" target="_blank" rel="noopener noreferrer">View offer</a>
+        </section>
+
+      </aside>
+
+      <main class="main-content">
+        <section class="summary-grid summary-grid-extended">
+          <article class="metric-card glass metric-card-score">
+            <span class="metric-label">Public storefront CRO Score</span>
+            <strong id="overallScore">0/100</strong>
+            <div class="score-gauge"><div id="scoreGaugeFill" class="score-gauge-fill"></div></div>
+            <span class="metric-sub" id="overallScoreLabel">0 to 100 scale</span>
+          </article>
+          <article class="metric-card glass">
+            <span class="metric-label">Checks used</span>
+            <strong id="checksUsed">0</strong>
+            <span class="metric-sub">Unlimited CRO recommendations</span>
+          </article>
+          <article class="metric-card glass">
+            <span class="metric-label">Critical issues</span>
+            <strong id="criticalIssues">0</strong>
+            <span class="metric-sub">High-impact failures</span>
+          </article>
+          <article class="metric-card glass">
+            <span class="metric-label">Pages analyzed</span>
+            <strong id="pagesAnalyzed">0</strong>
+            <span class="metric-sub">Detected or configured</span>
+          </article>
+          <article class="metric-card glass">
+            <span class="metric-label">Estimated revenue opportunity</span>
+            <strong id="revenueOpportunity">0%</strong>
+            <span class="metric-sub" id="revenueOpportunityLabel">Heuristic based on uncovered issues</span>
+          </article>
+          <article class="metric-card glass">
+            <span class="metric-label">Home page speed</span>
+            <strong id="pageSpeedScore">—</strong>
+            <span class="metric-sub" id="pageSpeedLabel">Performance score when available</span>
+          </article>
+        </section>
+
+
+        <section class="insights-grid">
+          <section class="glass panel">
+            <div class="section-heading">
+              <h2>Detected stack and store signals</h2>
+              <p>Automatic platform, app, theme, and storefront signal detection.</p>
+            </div>
+            <div id="stackInsights" class="empty-state">Run an analysis to detect the ecommerce stack.</div>
+          </section>
+
+          <section class="glass panel">
+            <div class="section-heading">
+              <h2>Competitor comparison</h2>
+              <p>Optional benchmark against a competitor home page.</p>
+            </div>
+            <div id="competitorComparison" class="empty-state">Add a competitor home page URL to compare performance and CRO signals.</div>
+          </section>
+        </section>
+
+        <section class="glass panel">
+          <div class="section-heading">
+            <h2>Page screenshots</h2>
+            <p>Visual previews for the pages included in the audit.</p>
+          </div>
+          <div id="screenshotGallery" class="screenshot-grid empty-state">Run an analysis to generate page previews.</div>
+        </section>
+
+        <section class="glass panel ad-inline-panel" aria-label="Advertisement recommendation">
+          <div class="ad-inline" data-ad-slot="inline">
+            <div class="ad-copy">
+              <span class="ad-label" data-ad-part="label">Advertisement</span>
+              <p class="ad-note" data-ad-part="note">Partner recommendation</p>
+              <h2 class="ad-title" data-ad-part="title">Offer a related CRO resource right before the recommendations list.</h2>
+              <p class="ad-text" data-ad-part="text">Good examples: an audit service, heatmap tool, Shopify app, email platform, or your own premium analysis package.</p>
+            </div>
+            <a class="secondary-button ad-cta-inline" data-ad-part="cta" href="#" target="_blank" rel="noopener noreferrer">Open sponsor</a>
+          </div>
+        </section>
+
+        <section class="glass panel recommendations-panel">
+          <div class="section-heading">
+            <h2>Top recommendations</h2>
+            <p>Prioritized items you can act on first.</p>
+          </div>
+          <div id="recommendations" class="recommendation-list empty-state">
+            Run an analysis to see your recommendations.
+          </div>
+        </section>
+
+        <section class="glass panel">
+          <div class="section-heading">
+            <h2>Required trust and support pages</h2>
+            <p>Automatic verification for contact, FAQ, and About Us requirements, with visible results for each check.</p>
+          </div>
+          <div id="requiredElementsResults" class="requirements-grid empty-state">
+            Run an analysis to see these checks.
+          </div>
+        </section>
+
+        <section class="glass panel">
+          <div class="section-heading">
+            <h2>Page-by-page breakdown</h2>
+            <p>Automatic checks run when the page can be fetched. Everything else remains available for structured manual review.</p>
+          </div>
+          <div id="pageBreakdown" class="page-breakdown empty-state">
+            No page data yet.
+          </div>
+        </section>
+
+
+        <section class="glass panel">
+          <div class="section-heading">
+            <h2>Store history tracking</h2>
+            <p>See how saved CRO scores changed over time for this browser.</p>
+          </div>
+          <div id="trendChart" class="empty-state">No score history yet.</div>
+        </section>
+
+        <section class="glass panel">
+          <div class="section-heading">
+            <h2>Saved reports</h2>
+            <p>Saved in your browser local storage.</p>
+          </div>
+          <div id="savedReports" class="saved-reports empty-state">
+            No saved reports yet.
+          </div>
+        </section>
+      </main>
+    </section>
+    <footer class="site-footer">
+      <section class="glass panel ad-footer-panel" aria-label="Advertisement footer placement">
+        <div class="ad-footer" data-ad-slot="footer">
+          <div class="ad-copy">
+            <span class="ad-label" data-ad-part="label">Advertisement</span>
+            <p class="ad-note" data-ad-part="note">End-of-report promotion</p>
+            <h2 class="ad-title" data-ad-part="title">Reserve this footer space for a final CTA, affiliate partner, or your own premium offer.</h2>
+            <p class="ad-text" data-ad-part="text">This slot stays visible near the end of the experience, which makes it useful for soft-conversion offers after the user has consumed the report.</p>
+          </div>
+          <a class="primary-button ad-cta" data-ad-part="cta" href="#" target="_blank" rel="noopener noreferrer">Explore</a>
+        </div>
+      </section>
+      <section class="contact-section">
+        <div class="contact-card">
+          <h3>🚀 Want a deeper CRO audit?</h3>
+          <p>
+            Get a full, personalized analysis of your website with actionable insights
+            to improve conversions, UX, and revenue.
+          </p>
+          <p class="contact-email">
+            📩 Contact:
+            <a href="mailto:puscas.adina.diana@gmail.com">puscas.adina.diana@gmail.com</a>
+          </p>
+          <p class="contact-note">
+            I’ll review your site and provide clear, practical recommendations tailored to your business.
+          </p>
+        </div>
+      </section>
+      <p class="footer-note">© 2026 CRO Analyzer Pro. All rights reserved.</p>
+    </footer>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="/checklist-data.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
