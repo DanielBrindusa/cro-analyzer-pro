@@ -7,7 +7,10 @@ const STATE = {
   progress: null,
   notifyAudio: null,
   notifyAudioUnlocked: false,
-  completionSoundPlayed: false
+  errorAudio: null,
+  errorAudioUnlocked: false,
+  completionSoundPlayed: false,
+  timeoutSoundPlayed: false
 };
 
 const PRO_PAYMENT_LINK = "REPLACE_WITH_YOUR_STRIPE_PAYMENT_LINK";
@@ -109,12 +112,29 @@ function getNotifyAudio() {
   return STATE.notifyAudio;
 }
 
+function getErrorAudio() {
+  if (!STATE.errorAudio) {
+    STATE.errorAudio = new Audio("misc/error.mp3");
+    STATE.errorAudio.preload = "auto";
+  }
+  return STATE.errorAudio;
+}
+
 function prepareNotifyAudio() {
   try {
     const audio = getNotifyAudio();
     audio.load();
   } catch (error) {
     console.warn("Notify audio could not be prepared.", error);
+  }
+}
+
+function prepareErrorAudio() {
+  try {
+    const audio = getErrorAudio();
+    audio.load();
+  } catch (error) {
+    console.warn("Error audio could not be prepared.", error);
   }
 }
 
@@ -146,6 +166,34 @@ async function unlockNotifyAudio() {
   }
 }
 
+async function unlockErrorAudio() {
+  if (STATE.errorAudioUnlocked) return true;
+
+  try {
+    const audio = getErrorAudio();
+    audio.muted = true;
+    audio.currentTime = 0;
+    const playResult = audio.play();
+    if (playResult && typeof playResult.then === "function") {
+      await playResult;
+    }
+    audio.pause();
+    audio.currentTime = 0;
+    audio.muted = false;
+    STATE.errorAudioUnlocked = true;
+    return true;
+  } catch (error) {
+    try {
+      const audio = getErrorAudio();
+      audio.pause();
+      audio.currentTime = 0;
+      audio.muted = false;
+    } catch (_) {}
+    console.warn("Error audio could not be unlocked. Playback may depend on browser permissions.", error);
+    return false;
+  }
+}
+
 function playCompletionSound() {
   if (STATE.completionSoundPlayed) return;
   STATE.completionSoundPlayed = true;
@@ -165,6 +213,28 @@ function playCompletionSound() {
   } catch (error) {
     console.warn("Notify audio playback failed.", error);
     STATE.completionSoundPlayed = false;
+  }
+}
+
+function playTimeoutSound() {
+  if (STATE.timeoutSoundPlayed) return;
+  STATE.timeoutSoundPlayed = true;
+
+  try {
+    const audio = getErrorAudio();
+    audio.pause();
+    audio.currentTime = 0;
+    audio.muted = false;
+    const playResult = audio.play();
+    if (playResult && typeof playResult.catch === "function") {
+      playResult.catch((error) => {
+        console.warn("Error audio playback was blocked or failed.", error);
+        STATE.timeoutSoundPlayed = false;
+      });
+    }
+  } catch (error) {
+    console.warn("Error audio playback failed.", error);
+    STATE.timeoutSoundPlayed = false;
   }
 }
 
@@ -631,6 +701,7 @@ async function runAnalysis() {
   analyzeButton.disabled = true;
   if (discoverButton) discoverButton.disabled = true;
   await unlockNotifyAudio();
+  await unlockErrorAudio();
   startProgress(estimatedTotalUnits, { maxRuntimeMs: ANALYSIS_MAX_RUNTIME_MS });
   setProgressPhase(shouldRunDiscovery ? "Discovery" : "Analysis");
   updateProgress(0.3, estimatedTotalUnits, shouldRunDiscovery
@@ -845,7 +916,9 @@ function startProgress(totalSteps, options = {}) {
   panel.classList.remove("hidden");
   hideAnalysisTimeoutPopup();
   STATE.completionSoundPlayed = false;
+  STATE.timeoutSoundPlayed = false;
   prepareNotifyAudio();
+  prepareErrorAudio();
   STATE.progress = {
     startedAt: Date.now(),
     totalUnits: Math.max(Number(totalSteps) || 1, 1),
@@ -909,6 +982,7 @@ function showAnalysisTimeoutPopup(message) {
   }
   analysisTimeoutModalInstance.style.display = "flex";
   analysisTimeoutModalInstance.classList.add("visible");
+  playTimeoutSound();
 }
 
 function hideAnalysisTimeoutPopup() {
