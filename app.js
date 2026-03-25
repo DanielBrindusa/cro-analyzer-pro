@@ -3853,6 +3853,176 @@ function drawPdfTag(doc, text, x, y) {
   return width;
 }
 
+
+function drawPdfSectionHeader(doc, title, subtitle, y, options = {}) {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const width = pageWidth - 28;
+  const fill = options.fillColor || [248, 250, 252];
+  const border = options.borderColor || [226, 232, 240];
+  doc.setFillColor(...fill);
+  doc.setDrawColor(...border);
+  doc.roundedRect(14, y - 5, width, subtitle ? 16 : 11, 4, 4, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.setTextColor(15, 23, 42);
+  doc.text(sanitizePdfText(title), 18, y + 1.5);
+  if (subtitle) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(sanitizePdfText(subtitle), 18, y + 8.5);
+  }
+  doc.setTextColor(33, 37, 41);
+  return y + (subtitle ? 16 : 11);
+}
+
+function drawPdfMiniBadge(doc, text, x, y, kind = 'info') {
+  const label = sanitizePdfText(text);
+  const palette = {
+    info: { fill: [239, 246, 255], draw: [147, 197, 253], text: [30, 64, 175] },
+    success: { fill: [240, 253, 244], draw: [134, 239, 172], text: [22, 101, 52] },
+    warn: { fill: [255, 251, 235], draw: [253, 224, 71], text: [146, 64, 14] },
+    danger: { fill: [254, 242, 242], draw: [252, 165, 165], text: [153, 27, 27] },
+    neutral: { fill: [248, 250, 252], draw: [203, 213, 225], text: [71, 85, 105] }
+  };
+  const colors = palette[kind] || palette.info;
+  const width = Math.min(58, doc.getTextWidth(label) + 8);
+  doc.setFillColor(...colors.fill);
+  doc.setDrawColor(...colors.draw);
+  doc.roundedRect(x, y - 4, width, 7, 3, 3, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(...colors.text);
+  doc.text(label, x + 4, y);
+  doc.setTextColor(33, 37, 41);
+  return width;
+}
+
+function getPdfImpactBadgeKind(value) {
+  const label = String(value || '').toLowerCase();
+  if (label.includes('high')) return 'danger';
+  if (label.includes('medium')) return 'warn';
+  if (label.includes('low')) return 'success';
+  return 'neutral';
+}
+
+function addPdfTextLink(doc, label, url, x, y, options = {}) {
+  const safeLabel = sanitizePdfText(label || url || 'Open link');
+  const maxWidth = options.maxWidth || 150;
+  const lines = doc.splitTextToSize(safeLabel, maxWidth);
+  doc.setFont(options.font || 'helvetica', options.fontStyle || 'normal');
+  doc.setFontSize(options.fontSize || 9);
+  doc.setTextColor(37, 99, 235);
+  doc.text(lines, x, y);
+  const lineHeight = options.lineHeight || 4.4;
+  lines.forEach((line, idx) => {
+    const width = doc.getTextWidth(line);
+    const topY = y - 3.2 + (idx * lineHeight);
+    if (url) {
+      doc.link(x, topY, width, lineHeight, { url });
+    }
+    doc.setDrawColor(191, 219, 254);
+    doc.setLineWidth(0.2);
+    doc.line(x, topY + lineHeight - 0.4, x + width, topY + lineHeight - 0.4);
+  });
+  doc.setTextColor(33, 37, 41);
+  return y + (lines.length * lineHeight);
+}
+
+function addPdfInternalLinkLine(doc, label, targetPage, x, y, options = {}) {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const maxWidth = options.maxWidth || 120;
+  const safeLabel = sanitizePdfText(label);
+  const lines = doc.splitTextToSize(safeLabel, maxWidth);
+  const lineHeight = options.lineHeight || 4.6;
+  doc.setFont('helvetica', options.bold ? 'bold' : 'normal');
+  doc.setFontSize(options.fontSize || 10);
+  doc.setTextColor(15, 23, 42);
+  doc.text(lines, x, y);
+  const dottedStart = x + Math.min(maxWidth + 4, 135);
+  const dottedEnd = pageWidth - 24;
+  const centerY = y - 1;
+  if (dottedEnd > dottedStart + 5) {
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineDashPattern([1, 1], 0);
+    doc.line(dottedStart, centerY, dottedEnd, centerY);
+    doc.setLineDashPattern([], 0);
+  }
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(30, 64, 175);
+  const pageLabel = String(targetPage || '-');
+  doc.text(pageLabel, pageWidth - 18, y, { align: 'right' });
+  const topY = y - 4;
+  const blockHeight = Math.max(lineHeight, lines.length * lineHeight);
+  doc.link(x, topY, pageWidth - x - 14, blockHeight, { pageNumber: Number(targetPage) || 1 });
+  doc.setTextColor(33, 37, 41);
+  return y + blockHeight;
+}
+
+function drawPdfCoverPage(doc, report, revenueOpportunity) {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  doc.setFillColor(15, 23, 42);
+  doc.rect(0, 0, pageWidth, pageHeight, 'F');
+  doc.setFillColor(30, 41, 59);
+  doc.circle(pageWidth - 20, 28, 28, 'F');
+  doc.setFillColor(37, 99, 235);
+  doc.circle(pageWidth - 2, 10, 26, 'F');
+  doc.setFillColor(255, 255, 255);
+  doc.roundedRect(14, 24, pageWidth - 28, 72, 6, 6, 'F');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(37, 99, 235);
+  doc.text('CRO WEBSITE ANALYZER', 20, 38);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(24);
+  doc.setTextColor(15, 23, 42);
+  const titleLines = doc.splitTextToSize(sanitizePdfText(report.projectName || 'CRO Audit Report'), pageWidth - 52);
+  doc.text(titleLines, 20, 50);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.setTextColor(71, 85, 105);
+  const createdOn = report.createdAt ? new Date(report.createdAt) : new Date();
+  doc.text(`Generated ${createdOn.toLocaleDateString()} · ${createdOn.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, 20, 68);
+  doc.text('Structured CRO review with page-by-page priorities, evidence, and direct implementation links.', 20, 76);
+
+  drawPdfStatCard(doc, 20, 108, 40, 22, 'CRO Score', `${report.overallScore || 0}/100`);
+  drawPdfStatCard(doc, 64, 108, 40, 22, 'Critical Issues', report.criticalIssues || 0);
+  drawPdfStatCard(doc, 108, 108, 40, 22, 'Pages Analyzed', report.pagesAnalyzed || 0);
+  drawPdfStatCard(doc, 152, 108, 44, 22, 'Opportunity', `${revenueOpportunity || 0}%`);
+
+  doc.setFillColor(255, 255, 255);
+  doc.roundedRect(14, 144, pageWidth - 28, 52, 6, 6, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.setTextColor(15, 23, 42);
+  doc.text('What is inside this report', 20, 156);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.setTextColor(71, 85, 105);
+  const bullets = [
+    'Executive summary with score, issue count, and estimated improvement opportunity.',
+    'Table of contents grouped by page type with direct section links.',
+    'Clickable recommendation URLs for homepage, category, product, cart, and related pages.',
+    'Issue / solution format designed for implementation teams and stakeholders.'
+  ];
+  let bulletY = 166;
+  bullets.forEach((line) => {
+    doc.setFillColor(37, 99, 235);
+    doc.circle(22, bulletY - 1.2, 1.2, 'F');
+    const wrapped = doc.splitTextToSize(sanitizePdfText(line), pageWidth - 42);
+    doc.text(wrapped, 27, bulletY);
+    bulletY += wrapped.length * 4.6 + 2;
+  });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(226, 232, 240);
+  doc.text('Prepared with CRO Website Analyzer', 14, pageHeight - 14);
+}
+
 function downloadPdfReport(report) {
   const jsPDF = window.jspdf?.jsPDF;
   if (!jsPDF) {
@@ -3865,28 +4035,30 @@ function downloadPdfReport(report) {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const headerTitle = hydratedReport.projectName || 'CRO Audit Report';
   const createdOn = hydratedReport.createdAt ? new Date(hydratedReport.createdAt) : new Date();
-  const headerSubtitle = `Generated ${createdOn.toLocaleDateString()} • Professional CRO audit summary`;
+  const headerSubtitle = `Generated ${createdOn.toLocaleDateString()} · Professional CRO audit summary`;
   const pageWidth = doc.internal.pageSize.getWidth();
   const contentWidth = pageWidth - 28;
-  let y = 42;
 
+  drawPdfCoverPage(doc, hydratedReport, revenueOpportunity);
+  doc.addPage();
   drawPdfHeader(doc, headerTitle, headerSubtitle);
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.text('Executive summary', 14, y);
-  y += 6;
+  let y = 42;
+  const score = Number(hydratedReport.overallScore || 0);
+  const healthLabel = score >= 80 ? 'Strong CRO baseline' : score >= 60 ? 'Good start with clear wins available' : 'High improvement opportunity';
+  const scoreKind = score >= 80 ? 'success' : score >= 60 ? 'warn' : 'danger';
 
-  const statCardWidth = (contentWidth - 8) / 2;
-  drawPdfStatCard(doc, 14, y, statCardWidth, 20, 'CRO Score', `${hydratedReport.overallScore || 0}/100`);
+  y = drawPdfSectionHeader(doc, 'Executive summary', 'The most important numbers and context at a glance.', y);
+  const statCardWidth = (contentWidth - 12) / 3;
+  drawPdfStatCard(doc, 14, y, statCardWidth, 20, 'CRO Score', `${score}/100`);
   drawPdfStatCard(doc, 18 + statCardWidth, y, statCardWidth, 20, 'Critical issues', hydratedReport.criticalIssues || 0);
+  drawPdfStatCard(doc, 22 + statCardWidth * 2, y, statCardWidth, 20, 'Revenue opportunity', `${revenueOpportunity || 0}%`);
   y += 24;
-  drawPdfStatCard(doc, 14, y, statCardWidth, 20, 'Pages analyzed', hydratedReport.pagesAnalyzed || 0);
-  drawPdfStatCard(doc, 18 + statCardWidth, y, statCardWidth, 20, 'Revenue opportunity', `${revenueOpportunity || 0}%`);
-  y += 27;
+  drawPdfMiniBadge(doc, healthLabel, 14, y, scoreKind);
+  drawPdfMiniBadge(doc, `${hydratedReport.pagesAnalyzed || 0} pages analyzed`, 76, y, 'neutral');
+  drawPdfMiniBadge(doc, `${recommendations.length} prioritized recommendations`, 132, y, 'info');
+  y += 10;
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
   const summaryLines = [
     hydratedReport.plan ? `Plan: ${String(hydratedReport.plan).toUpperCase()}` : '',
     hydratedReport.stackSummary?.platform ? `Platform: ${hydratedReport.stackSummary.platform}` : '',
@@ -3895,122 +4067,257 @@ function downloadPdfReport(report) {
     hydratedReport.manualNotes ? `Notes: ${hydratedReport.manualNotes}` : ''
   ].filter(Boolean);
 
-  summaryLines.forEach((line) => {
-    y = addPdfWrappedText(doc, line, 14, y, contentWidth, 4.8, {
-      bottomGap: 1.5,
+  if (!summaryLines.length) {
+    y = addPdfWrappedText(doc, 'No extra store metadata was available for this report.', 14, y, contentWidth, 4.8, {
+      bottomGap: 2,
       headerTitle,
       headerSubtitle
     });
-  });
+  } else {
+    summaryLines.forEach((line) => {
+      y = addPdfWrappedText(doc, line, 14, y, contentWidth, 4.8, {
+        bottomGap: 1.8,
+        headerTitle,
+        headerSubtitle
+      });
+    });
+  }
 
   y += 2;
-  y = ensurePdfSpace(doc, y, 18, headerTitle, headerSubtitle);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.text('Table of contents', 14, y);
-  y += 7;
+  const pageResults = hydratedReport.pageResults || [];
+  if (pageResults.length) {
+    y = ensurePdfSpace(doc, y, 44, headerTitle, headerSubtitle);
+    y = drawPdfSectionHeader(doc, 'Analyzed pages', 'Direct links to the pages used for this audit.', y);
+    pageResults.forEach((page, index) => {
+      y = ensurePdfSpace(doc, y, 9, headerTitle, headerSubtitle);
+      const pageLabel = page?.pageLabel || PAGE_LABELS[page?.type] || `Page ${index + 1}`;
+      const url = page?.url || '';
+      drawPdfMiniBadge(doc, pageLabel, 16, y, 'info');
+      y = addPdfTextLink(doc, url || 'No page URL available', url, 48, y, { maxWidth: 145, fontSize: 8.8 });
+      y += 1.5;
+    });
+  }
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
+  doc.addPage();
+  drawPdfHeader(doc, headerTitle, headerSubtitle);
+  y = 42;
+
+  const tocEntries = [];
+  const issueCountByImpact = recommendations.reduce((acc, item) => {
+    const key = String(item.impactLabel || 'Unknown');
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+
+  y = drawPdfSectionHeader(doc, 'Table of contents', 'Jump directly to each recommendation section in the report.', y);
+  const staticSections = [
+    { label: 'Executive summary', pageNumber: 2 },
+    { label: 'Analyzed pages', pageNumber: 2 },
+    { label: 'Table of contents', pageNumber: 3 }
+  ];
+  staticSections.forEach((entry) => {
+    y = ensurePdfSpace(doc, y, 8, headerTitle, headerSubtitle);
+    y = addPdfInternalLinkLine(doc, entry.label, entry.pageNumber, 16, y, { maxWidth: 100 });
+    tocEntries.push(entry);
+  });
+
   if (!groups.length) {
-    y = addPdfWrappedText(doc, 'No recommendations were available for this report.', 14, y, contentWidth, 5, {
+    y = addPdfWrappedText(doc, 'No recommendations were available for this report.', 16, y + 2, contentWidth - 2, 4.8, {
       headerTitle,
       headerSubtitle
     });
   } else {
     groups.forEach((group, index) => {
-      y = ensurePdfSpace(doc, y, 8, headerTitle, headerSubtitle);
-      const label = `${index + 1}. ${group.label}`;
-      doc.text(sanitizePdfText(label), 16, y);
-      doc.setTextColor(100, 116, 139);
-      doc.text(`${group.items.length} recommendation${group.items.length === 1 ? '' : 's'}`, pageWidth - 14, y, { align: 'right' });
-      doc.setTextColor(33, 37, 41);
-      y += 6;
+      y = ensurePdfSpace(doc, y, 9, headerTitle, headerSubtitle);
+      const entry = { label: `${index + 1}. ${group.label}`, pageNumber: null, group };
+      entry.y = y;
+      entry.pageIndex = doc.internal.getCurrentPageInfo().pageNumber;
+      y = addPdfInternalLinkLine(doc, `${index + 1}. ${group.label}`, 3, 16, y, { maxWidth: 100 });
+      tocEntries.push(entry);
+      const impactSummary = ['High', 'Medium', 'Low'].map((label) => {
+        const count = group.items.filter((item) => String(item.impactLabel || '').toLowerCase() === label.toLowerCase()).length;
+        return count ? `${label}: ${count}` : '';
+      }).filter(Boolean).join(' · ');
+      if (impactSummary) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8.5);
+        doc.setTextColor(100, 116, 139);
+        doc.text(sanitizePdfText(impactSummary), 26, y - 0.8);
+        doc.setTextColor(33, 37, 41);
+      }
     });
   }
 
+  y += 4;
+  y = ensurePdfSpace(doc, y, 28, headerTitle, headerSubtitle);
+  y = drawPdfSectionHeader(doc, 'Issue distribution', 'Quick count of recommendation severity across the report.', y);
+  const severityLabels = Object.keys(issueCountByImpact).length ? Object.keys(issueCountByImpact) : ['High', 'Medium', 'Low'];
+  const boxWidth = (contentWidth - ((Math.max(severityLabels.length, 1) - 1) * 4)) / Math.max(severityLabels.length, 1);
+  let boxX = 14;
+  severityLabels.forEach((label) => {
+    drawPdfStatCard(doc, boxX, y, boxWidth, 18, label, issueCountByImpact[label] || 0);
+    boxX += boxWidth + 4;
+  });
+  y += 24;
+
+  const recommendationSectionStartPage = doc.internal.getNumberOfPages() + 1;
   if (recommendations.length) {
     doc.addPage();
     drawPdfHeader(doc, headerTitle, headerSubtitle);
     y = 42;
 
     groups.forEach((group, groupIndex) => {
-      y = ensurePdfSpace(doc, y, 18, headerTitle, headerSubtitle);
-      doc.setFillColor(248, 250, 252);
-      doc.setDrawColor(226, 232, 240);
-      doc.roundedRect(14, y - 5, contentWidth, 11, 4, 4, 'FD');
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(12);
-      doc.text(`${groupIndex + 1}. ${sanitizePdfText(group.label)}`, 18, y + 1.5);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9);
-      doc.setTextColor(100, 116, 139);
-      doc.text(`${group.items.length} item${group.items.length === 1 ? '' : 's'}`, pageWidth - 18, y + 1.5, { align: 'right' });
-      doc.setTextColor(33, 37, 41);
-      y += 12;
+      const currentPageNumber = doc.internal.getCurrentPageInfo().pageNumber;
+      const tocEntry = tocEntries.find((entry) => entry.group === group);
+      if (tocEntry) tocEntry.pageNumber = currentPageNumber;
+
+      y = ensurePdfSpace(doc, y, 22, headerTitle, headerSubtitle);
+      y = drawPdfSectionHeader(doc, `${groupIndex + 1}. ${group.label}`, `${group.items.length} recommendation${group.items.length === 1 ? '' : 's'} in this section`, y, {
+        fillColor: [241, 245, 249],
+        borderColor: [203, 213, 225]
+      });
 
       group.items.forEach((item, itemIndex) => {
-        const estimatedHeight = 42;
-        y = ensurePdfSpace(doc, y, estimatedHeight, headerTitle, headerSubtitle);
-        doc.setDrawColor(226, 232, 240);
-        doc.setFillColor(255, 255, 255);
-        doc.roundedRect(14, y - 4, contentWidth, 6, 3, 3, 'S');
-
-        const tagWidth = drawPdfTag(doc, item.pageLabel || group.label, 16, y);
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(11);
-        const titleX = 18 + tagWidth;
-        const titleWidth = pageWidth - titleX - 14;
-        const titleLines = doc.splitTextToSize(`${group.startIndex + itemIndex + 1}. ${sanitizePdfText(item.title || 'Recommendation')}`, titleWidth);
-        doc.text(titleLines, titleX, y);
-        y += Math.max(6, titleLines.length * 4.8);
-
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(9);
-        doc.text('Issue', 16, y);
-        y += 4.5;
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(10);
-        y = addPdfWrappedText(doc, getIssueText(item), 16, y, contentWidth - 4, 4.8, {
-          bottomGap: 1.5,
-          headerTitle,
-          headerSubtitle
-        });
-
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(9);
-        doc.text('Solution', 16, y);
-        y += 4.5;
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(10);
-        y = addPdfWrappedText(doc, getSolutionText(item), 16, y, contentWidth - 4, 4.8, {
-          bottomGap: 1.5,
-          headerTitle,
-          headerSubtitle
-        });
-
+        const issueText = getIssueText(item);
+        const solutionText = getSolutionText(item);
         const metaParts = [
           item.impactLabel ? `Impact: ${item.impactLabel}` : '',
           item.confidence ? `Confidence: ${item.confidence}` : '',
-          item.url ? `URL: ${item.url}` : ''
+          item.sourceLabel ? `Source: ${item.sourceLabel}` : ''
         ].filter(Boolean);
+        const evidenceText = item.evidence ? sanitizePdfText(item.evidence) : '';
+        const hasUrl = !!item.url;
+        const title = `${group.startIndex + itemIndex + 1}. ${item.title || 'Recommendation'}`;
+
+        let estimatedHeight = 52;
+        estimatedHeight += Math.ceil(doc.splitTextToSize(sanitizePdfText(issueText), contentWidth - 16).length) * 4.6;
+        estimatedHeight += Math.ceil(doc.splitTextToSize(sanitizePdfText(solutionText), contentWidth - 16).length) * 4.6;
+        if (evidenceText) estimatedHeight += Math.ceil(doc.splitTextToSize(evidenceText, contentWidth - 16).length) * 4.2 + 8;
+        if (hasUrl) estimatedHeight += 10;
+        y = ensurePdfSpace(doc, y, estimatedHeight, headerTitle, headerSubtitle);
+
+        doc.setFillColor(255, 255, 255);
+        doc.setDrawColor(226, 232, 240);
+        doc.roundedRect(14, y - 4, contentWidth, estimatedHeight - 6, 4, 4, 'FD');
+
+        let headerY = y + 1;
+        const tagWidth = drawPdfMiniBadge(doc, item.pageLabel || group.label, 18, headerY, 'info');
+        const impactX = 22 + tagWidth;
+        drawPdfMiniBadge(doc, `${item.impactLabel || 'Impact unknown'} impact`, impactX, headerY, getPdfImpactBadgeKind(item.impactLabel));
+
+        const titleX = 18;
+        headerY += 8;
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(11);
+        doc.setTextColor(15, 23, 42);
+        const titleLines = doc.splitTextToSize(sanitizePdfText(title), contentWidth - 8);
+        doc.text(titleLines, titleX, headerY);
+        headerY += Math.max(6, titleLines.length * 4.7);
 
         if (metaParts.length) {
-          doc.setFont('helvetica', 'italic');
+          doc.setFont('helvetica', 'normal');
           doc.setFontSize(8.5);
           doc.setTextColor(100, 116, 139);
-          y = addPdfWrappedText(doc, metaParts.join(' • '), 16, y, contentWidth - 4, 4.2, {
-            bottomGap: 3,
-            headerTitle,
-            headerSubtitle
-          });
-          doc.setTextColor(33, 37, 41);
-        } else {
-          y += 2;
+          const metaLines = doc.splitTextToSize(sanitizePdfText(metaParts.join(' · ')), contentWidth - 8);
+          doc.text(metaLines, titleX, headerY);
+          headerY += metaLines.length * 4.1 + 1;
         }
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.setTextColor(15, 23, 42);
+        doc.text('ISSUE', 18, headerY);
+        headerY += 4.5;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        doc.setTextColor(33, 37, 41);
+        const issueLines = doc.splitTextToSize(sanitizePdfText(issueText), contentWidth - 8);
+        doc.text(issueLines, 18, headerY);
+        headerY += issueLines.length * 4.6 + 2;
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.text('SOLUTION', 18, headerY);
+        headerY += 4.5;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        const solutionLines = doc.splitTextToSize(sanitizePdfText(solutionText), contentWidth - 8);
+        doc.text(solutionLines, 18, headerY);
+        headerY += solutionLines.length * 4.6 + 2;
+
+        if (evidenceText) {
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(9);
+          doc.text('EVIDENCE', 18, headerY);
+          headerY += 4.5;
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9);
+          doc.setTextColor(71, 85, 105);
+          const evidenceLines = doc.splitTextToSize(evidenceText, contentWidth - 8);
+          doc.text(evidenceLines, 18, headerY);
+          headerY += evidenceLines.length * 4.2 + 2;
+          doc.setTextColor(33, 37, 41);
+        }
+
+        if (hasUrl) {
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(9);
+          doc.text('DIRECT PAGE LINK', 18, headerY);
+          headerY += 4.8;
+          headerY = addPdfTextLink(doc, item.url, item.url, 18, headerY, {
+            maxWidth: contentWidth - 10,
+            fontSize: 8.8,
+            lineHeight: 4.2
+          }) + 2;
+        }
+
+        y += estimatedHeight - 2;
       });
     });
   }
+
+  // Rewrite TOC entries with the final page numbers now that recommendation pages are known.
+  doc.setPage(3);
+  drawPdfHeader(doc, headerTitle, headerSubtitle);
+  y = 42;
+  y = drawPdfSectionHeader(doc, 'Table of contents', 'Jump directly to each recommendation section in the report.', y);
+  staticSections.forEach((entry) => {
+    y = ensurePdfSpace(doc, y, 8, headerTitle, headerSubtitle);
+    y = addPdfInternalLinkLine(doc, entry.label, entry.pageNumber, 16, y, { maxWidth: 100 });
+  });
+  if (!groups.length) {
+    y = addPdfWrappedText(doc, 'No recommendations were available for this report.', 16, y + 2, contentWidth - 2, 4.8, {
+      headerTitle,
+      headerSubtitle
+    });
+  } else {
+    groups.forEach((group, index) => {
+      const entry = tocEntries.find((item) => item.group === group);
+      y = ensurePdfSpace(doc, y, 9, headerTitle, headerSubtitle);
+      y = addPdfInternalLinkLine(doc, `${index + 1}. ${group.label}`, entry?.pageNumber || recommendationSectionStartPage, 16, y, { maxWidth: 100 });
+      const impactSummary = ['High', 'Medium', 'Low'].map((label) => {
+        const count = group.items.filter((item) => String(item.impactLabel || '').toLowerCase() === label.toLowerCase()).length;
+        return count ? `${label}: ${count}` : '';
+      }).filter(Boolean).join(' · ');
+      if (impactSummary) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8.5);
+        doc.setTextColor(100, 116, 139);
+        doc.text(sanitizePdfText(impactSummary), 26, y - 0.8);
+        doc.setTextColor(33, 37, 41);
+      }
+    });
+  }
+  y += 4;
+  y = ensurePdfSpace(doc, y, 28, headerTitle, headerSubtitle);
+  y = drawPdfSectionHeader(doc, 'Issue distribution', 'Quick count of recommendation severity across the report.', y);
+  const finalSeverityLabels = Object.keys(issueCountByImpact).length ? Object.keys(issueCountByImpact) : ['High', 'Medium', 'Low'];
+  const finalBoxWidth = (contentWidth - ((Math.max(finalSeverityLabels.length, 1) - 1) * 4)) / Math.max(finalSeverityLabels.length, 1);
+  let finalBoxX = 14;
+  finalSeverityLabels.forEach((label) => {
+    drawPdfStatCard(doc, finalBoxX, y, finalBoxWidth, 18, label, issueCountByImpact[label] || 0);
+    finalBoxX += finalBoxWidth + 4;
+  });
 
   drawPdfFooter(doc);
   doc.save(`${slugify(hydratedReport.projectName || 'cro-report')}-report.pdf`);
