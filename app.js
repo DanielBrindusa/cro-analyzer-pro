@@ -4,7 +4,13 @@ const STATE = {
   plan: "free",
   latestReport: null,
   productRows: 0,
-  progress: null
+  progress: null,
+  notifyAudio: null,
+  notifyAudioUnlocked: false,
+  errorAudio: null,
+  errorAudioUnlocked: false,
+  completionSoundPlayed: false,
+  timeoutSoundPlayed: false
 };
 
 const PRO_PAYMENT_LINK = "REPLACE_WITH_YOUR_STRIPE_PAYMENT_LINK";
@@ -23,7 +29,7 @@ const MAX_DISCOVERY_SITEMAPS = 6;
 const MAX_DISCOVERY_URLS_FROM_SITEMAP = 400;
 const MAX_DISCOVERY_CANDIDATE_PAGES = 14;
 const RESOURCE_FETCH_CONCURRENCY = 4;
-const ANALYSIS_MAX_RUNTIME_MS = 10 * 60 * 1000;
+const ANALYSIS_MAX_RUNTIME_MS = 20 * 60 * 1000;
 const PAGE_FETCH_CACHE = new Map();
 const TEXT_FETCH_CACHE = new Map();
 
@@ -48,6 +54,12 @@ const PAGE_LABELS = {
   checkout: "Checkout page",
   thankyou: "Thank you page"
 };
+
+const RECOMMENDATION_GROUP_ORDER = ["home", "category", "product", "cart", "checkout", "thankyou", "general"];
+const RECOMMENDATION_GROUP_LABELS = RECOMMENDATION_GROUP_ORDER.reduce((acc, key) => {
+  acc[key] = PAGE_LABELS[key] || key;
+  return acc;
+}, {});
 
 const DEFAULT_AD_CONFIG = {
   slots: {
@@ -91,6 +103,140 @@ const DEFAULT_AD_CONFIG = {
 };
 
 let AD_CONFIG = JSON.parse(JSON.stringify(DEFAULT_AD_CONFIG));
+
+function getNotifyAudio() {
+  if (!STATE.notifyAudio) {
+    STATE.notifyAudio = new Audio("misc/notify.mp3");
+    STATE.notifyAudio.preload = "auto";
+  }
+  return STATE.notifyAudio;
+}
+
+function getErrorAudio() {
+  if (!STATE.errorAudio) {
+    STATE.errorAudio = new Audio("misc/error.mp3");
+    STATE.errorAudio.preload = "auto";
+  }
+  return STATE.errorAudio;
+}
+
+function prepareNotifyAudio() {
+  try {
+    const audio = getNotifyAudio();
+    audio.load();
+  } catch (error) {
+    console.warn("Notify audio could not be prepared.", error);
+  }
+}
+
+function prepareErrorAudio() {
+  try {
+    const audio = getErrorAudio();
+    audio.load();
+  } catch (error) {
+    console.warn("Error audio could not be prepared.", error);
+  }
+}
+
+async function unlockNotifyAudio() {
+  if (STATE.notifyAudioUnlocked) return true;
+
+  try {
+    const audio = getNotifyAudio();
+    audio.muted = true;
+    audio.currentTime = 0;
+    const playResult = audio.play();
+    if (playResult && typeof playResult.then === "function") {
+      await playResult;
+    }
+    audio.pause();
+    audio.currentTime = 0;
+    audio.muted = false;
+    STATE.notifyAudioUnlocked = true;
+    return true;
+  } catch (error) {
+    try {
+      const audio = getNotifyAudio();
+      audio.pause();
+      audio.currentTime = 0;
+      audio.muted = false;
+    } catch (_) {}
+    console.warn("Notify audio could not be unlocked. Playback may depend on browser permissions.", error);
+    return false;
+  }
+}
+
+async function unlockErrorAudio() {
+  if (STATE.errorAudioUnlocked) return true;
+
+  try {
+    const audio = getErrorAudio();
+    audio.muted = true;
+    audio.currentTime = 0;
+    const playResult = audio.play();
+    if (playResult && typeof playResult.then === "function") {
+      await playResult;
+    }
+    audio.pause();
+    audio.currentTime = 0;
+    audio.muted = false;
+    STATE.errorAudioUnlocked = true;
+    return true;
+  } catch (error) {
+    try {
+      const audio = getErrorAudio();
+      audio.pause();
+      audio.currentTime = 0;
+      audio.muted = false;
+    } catch (_) {}
+    console.warn("Error audio could not be unlocked. Playback may depend on browser permissions.", error);
+    return false;
+  }
+}
+
+function playCompletionSound() {
+  if (STATE.completionSoundPlayed) return;
+  STATE.completionSoundPlayed = true;
+
+  try {
+    const audio = getNotifyAudio();
+    audio.pause();
+    audio.currentTime = 0;
+    audio.muted = false;
+    const playResult = audio.play();
+    if (playResult && typeof playResult.catch === "function") {
+      playResult.catch((error) => {
+        console.warn("Notify audio playback was blocked or failed.", error);
+        STATE.completionSoundPlayed = false;
+      });
+    }
+  } catch (error) {
+    console.warn("Notify audio playback failed.", error);
+    STATE.completionSoundPlayed = false;
+  }
+}
+
+function playTimeoutSound() {
+  if (STATE.timeoutSoundPlayed) return;
+  STATE.timeoutSoundPlayed = true;
+
+  try {
+    const audio = getErrorAudio();
+    audio.pause();
+    audio.currentTime = 0;
+    audio.muted = false;
+    const playResult = audio.play();
+    if (playResult && typeof playResult.catch === "function") {
+      playResult.catch((error) => {
+        console.warn("Error audio playback was blocked or failed.", error);
+        STATE.timeoutSoundPlayed = false;
+      });
+    }
+  } catch (error) {
+    console.warn("Error audio playback failed.", error);
+    STATE.timeoutSoundPlayed = false;
+  }
+}
 
 const AUTOMATED_CHECKS = {
   general: [
@@ -554,6 +700,8 @@ async function runAnalysis() {
 
   analyzeButton.disabled = true;
   if (discoverButton) discoverButton.disabled = true;
+  await unlockNotifyAudio();
+  await unlockErrorAudio();
   startProgress(estimatedTotalUnits, { maxRuntimeMs: ANALYSIS_MAX_RUNTIME_MS });
   setProgressPhase(shouldRunDiscovery ? "Discovery" : "Analysis");
   updateProgress(0.3, estimatedTotalUnits, shouldRunDiscovery
@@ -678,11 +826,7 @@ async function runAnalysis() {
     requiredElementsAudit.recommendations.forEach((rec) => recommendations.push(rec));
 
     const cleanedRecommendations = dedupeRecommendations(recommendations);
-    cleanedRecommendations.sort((a, b) => {
-      const impactDelta = impactRank(b.impactLabel) - impactRank(a.impactLabel);
-      if (impactDelta !== 0) return impactDelta;
-      return (b.priority || 0) - (a.priority || 0);
-    });
+    cleanedRecommendations.sort(compareRecommendations);
     const recommendationLimit = Number.POSITIVE_INFINITY;
     const topRecommendations = cleanedRecommendations.slice(0, recommendationLimit);
 
@@ -733,9 +877,13 @@ async function runAnalysis() {
     completeProgress(`Analysis complete. ${report.pagesAnalyzed} page${report.pagesAnalyzed === 1 ? "" : "s"} processed.`);
   } catch (error) {
     const timeoutHit = String(error?.message || "").includes("maximum runtime") || String(error?.message || "").includes("exceeded the maximum runtime");
+    const timeoutMessage = `Please try again. The analysis could not be completed within ${formatDuration(ANALYSIS_MAX_RUNTIME_MS)}.`;
     failProgress(timeoutHit
       ? `The analysis reached the ${formatDuration(ANALYSIS_MAX_RUNTIME_MS)} time limit before finishing. Try fewer pages or rerun the audit.`
       : "The analysis stopped unexpectedly. Please try again.");
+    if (timeoutHit) {
+      showAnalysisTimeoutPopup(timeoutMessage);
+    }
     console.error(error);
   } finally {
     analyzeButton.disabled = false;
@@ -766,6 +914,11 @@ function revealAnalysisProgress() {
 function startProgress(totalSteps, options = {}) {
   const panel = document.getElementById("analysisProgress");
   panel.classList.remove("hidden");
+  hideAnalysisTimeoutPopup();
+  STATE.completionSoundPlayed = false;
+  STATE.timeoutSoundPlayed = false;
+  prepareNotifyAudio();
+  prepareErrorAudio();
   STATE.progress = {
     startedAt: Date.now(),
     totalUnits: Math.max(Number(totalSteps) || 1, 1),
@@ -803,6 +956,7 @@ function completeProgress(statusText) {
     STATE.progress.baseStatus = statusText;
   }
   setProgressValue(100, "Analysis complete", statusText);
+  playCompletionSound();
   revealAnalysisProgress();
 }
 
@@ -817,6 +971,24 @@ function failProgress(statusText) {
   }
   setProgressValue(100, "Analysis failed", statusText);
   revealAnalysisProgress();
+}
+
+function showAnalysisTimeoutPopup(message) {
+  ensureAnalysisTimeoutModal();
+  if (!analysisTimeoutModalInstance) return;
+  const messageNode = analysisTimeoutModalInstance.querySelector("[data-timeout-message]");
+  if (messageNode) {
+    messageNode.textContent = message || "Please try again. The analysis could not be completed within the allowed time.";
+  }
+  analysisTimeoutModalInstance.style.display = "flex";
+  analysisTimeoutModalInstance.classList.add("visible");
+  playTimeoutSound();
+}
+
+function hideAnalysisTimeoutPopup() {
+  if (!analysisTimeoutModalInstance) return;
+  analysisTimeoutModalInstance.classList.remove("visible");
+  analysisTimeoutModalInstance.style.display = "none";
 }
 
 function setProgressValue(percent, titleText, statusText) {
@@ -2066,18 +2238,40 @@ function renderRecommendations(recommendations) {
     return;
   }
 
-  container.className = "recommendation-list";
-  container.innerHTML = recommendations.map((item, index) => {
-    const issueText = getIssueText(item);
-    const solutionText = getSolutionText(item);
-    const destinationUrl = getRecommendationDestination(item, STATE.latestReport?.pageResults || []);
-    const pageName = item.pageLabel || PAGE_LABELS[item.page] || "Relevant page";
-    const linkLabel = `${index + 1}. ${item.title}`;
-    const linkHint = destinationUrl ? `Open ${pageName} · ${shortDisplayUrl(destinationUrl)}` : `Open ${pageName} · No matching page URL configured`;
-    const confidence = item.confidence || (item.type === "automatic" ? "Medium" : "Low");
-    const sourceLabel = item.sourceLabel || (item.type === "automatic" ? "Automatic inspection" : "Manual review");
+  const sortedRecommendations = [...recommendations].sort(compareRecommendations);
+  const groupedRecommendations = groupRecommendationsByPage(sortedRecommendations);
 
+  container.className = "recommendation-list recommendation-groups";
+  container.innerHTML = groupedRecommendations.map((group) => {
+    const cards = group.items.map((item, index) => renderRecommendationCard(item, group.startIndex + index));
     return `
+      <section class="recommendation-group" data-page-group="${escapeAttribute(group.page)}">
+        <div class="recommendation-group-header">
+          <div>
+            <h3>${escapeHtml(group.label)}</h3>
+            <p>${group.items.length} recommendation${group.items.length === 1 ? "" : "s"}</p>
+          </div>
+          <span class="tag info">${group.items.length}</span>
+        </div>
+        <div class="recommendation-group-list">
+          ${cards.join("")}
+        </div>
+      </section>
+    `;
+  }).join("");
+}
+
+function renderRecommendationCard(item, index) {
+  const issueText = getIssueText(item);
+  const solutionText = getSolutionText(item);
+  const destinationUrl = getRecommendationDestination(item, STATE.latestReport?.pageResults || []);
+  const pageName = item.pageLabel || PAGE_LABELS[item.page] || "Relevant page";
+  const linkLabel = `${index + 1}. ${item.title}`;
+  const linkHint = destinationUrl ? `Open ${pageName} · ${shortDisplayUrl(destinationUrl)}` : `Open ${pageName} · No matching page URL configured`;
+  const confidence = item.confidence || (item.type === "automatic" ? "Medium" : "Low");
+  const sourceLabel = item.sourceLabel || (item.type === "automatic" ? "Automatic inspection" : "Manual review");
+
+  return `
     <article class="rec-card rec-card-detailed">
       <div class="rec-head">
         <div class="rec-head-main">
@@ -2108,7 +2302,58 @@ function renderRecommendations(recommendations) {
       </div>
     </article>
   `;
-  }).join("");
+}
+
+function groupRecommendationsByPage(recommendations) {
+  const groups = new Map();
+
+  recommendations.forEach((item) => {
+    const page = getNormalizedRecommendationPage(item);
+    if (!groups.has(page)) {
+      groups.set(page, {
+        page,
+        label: RECOMMENDATION_GROUP_LABELS[page] || item.pageLabel || PAGE_LABELS[page] || "Relevant page",
+        items: []
+      });
+    }
+    groups.get(page).items.push({
+      ...item,
+      page,
+      pageLabel: item.pageLabel || PAGE_LABELS[page] || RECOMMENDATION_GROUP_LABELS[page] || "Relevant page"
+    });
+  });
+
+  let runningIndex = 0;
+  return [...groups.values()]
+    .sort((a, b) => recommendationGroupRank(a.page) - recommendationGroupRank(b.page))
+    .map((group) => {
+      const enrichedGroup = { ...group, startIndex: runningIndex };
+      runningIndex += group.items.length;
+      return enrichedGroup;
+    });
+}
+
+function getNormalizedRecommendationPage(item) {
+  return item?.page || normalizePageType(item?.pageLabel) || guessPageFromText(item?.title || item?.detail || "") || "general";
+}
+
+function recommendationGroupRank(page) {
+  const normalizedPage = normalizePageType(page) || "general";
+  const index = RECOMMENDATION_GROUP_ORDER.indexOf(normalizedPage);
+  return index === -1 ? RECOMMENDATION_GROUP_ORDER.length : index;
+}
+
+function compareRecommendations(a, b) {
+  const groupDelta = recommendationGroupRank(getNormalizedRecommendationPage(a)) - recommendationGroupRank(getNormalizedRecommendationPage(b));
+  if (groupDelta !== 0) return groupDelta;
+
+  const impactDelta = impactRank(b.impactLabel) - impactRank(a.impactLabel);
+  if (impactDelta !== 0) return impactDelta;
+
+  const priorityDelta = (b.priority || 0) - (a.priority || 0);
+  if (priorityDelta !== 0) return priorityDelta;
+
+  return String(a.title || "").localeCompare(String(b.title || ""));
 }
 
 function hydrateReportLinks(report) {
@@ -3497,501 +3742,45 @@ function downloadStoredReportPdf(reportId) {
   downloadPdfReport(report);
 }
 
-function getSortedRecommendationsForPdf(recommendations) {
-  return [...(recommendations || [])].sort((a, b) => {
-    const pageA = normalizePageType(a?.page || a?.pageLabel || guessPageFromText(a?.title || a?.detail || "") || "general") || "general";
-    const pageB = normalizePageType(b?.page || b?.pageLabel || guessPageFromText(b?.title || b?.detail || "") || "general") || "general";
-    const pageRankA = RECOMMENDATION_GROUP_ORDER.indexOf(pageA);
-    const pageRankB = RECOMMENDATION_GROUP_ORDER.indexOf(pageB);
-    if (pageRankA !== pageRankB) return (pageRankA === -1 ? 999 : pageRankA) - (pageRankB === -1 ? 999 : pageRankB);
-
-    const impactA = impactRank(a?.impactLabel || "Low");
-    const impactB = impactRank(b?.impactLabel || "Low");
-    if (impactA !== impactB) return impactB - impactA;
-
-    return String(a?.title || "").localeCompare(String(b?.title || ""));
-  });
-}
-
-function groupRecommendationsForPdf(recommendations) {
-  const groups = new Map();
-  getSortedRecommendationsForPdf(recommendations).forEach((item) => {
-    const page = normalizePageType(item?.page || item?.pageLabel || guessPageFromText(item?.title || item?.detail || "") || "general") || "general";
-    const pageLabel = item?.pageLabel || PAGE_LABELS[page] || "General";
-    if (!groups.has(page)) {
-      groups.set(page, { key: page, label: pageLabel, items: [] });
-    }
-    groups.get(page).items.push({
-      ...item,
-      page,
-      pageLabel,
-      tagLabel: pageLabel
-    });
-  });
-  return [...groups.values()].filter((group) => group.items.length > 0);
-}
-
-function formatPdfDate(value) {
-  if (!value) return "";
-  try {
-    return new Date(value).toLocaleString(undefined, {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit"
-    });
-  } catch (error) {
-    return String(value);
-  }
-}
-
-
-function drawPdfHeader(doc, title, subtitle) {
-  const pageWidth = doc.internal.pageSize.getWidth();
-  doc.setFillColor(245, 247, 250);
-  doc.rect(0, 0, pageWidth, 24, 'F');
-  doc.setDrawColor(220, 225, 232);
-  doc.setLineWidth(0.3);
-  doc.line(14, 24, pageWidth - 14, 24);
-
-  doc.setTextColor(25, 35, 52);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(16);
-  doc.text(title, 14, 15);
-
-  if (subtitle) {
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8.5);
-    doc.setTextColor(92, 104, 121);
-    doc.text(subtitle, pageWidth - 14, 15, { align: "right" });
-  }
-
-  doc.setTextColor(33, 37, 41);
-}
-
-function drawPdfFooter(doc, pageNumber, pageCount, projectName) {
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  doc.setDrawColor(225, 230, 236);
-  doc.setLineWidth(0.25);
-  doc.line(14, pageHeight - 14, pageWidth - 14, pageHeight - 14);
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
-  doc.setTextColor(92, 104, 121);
-  doc.text(projectName, 14, pageHeight - 8.5);
-  doc.text(`Page ${pageNumber} of ${pageCount}`, pageWidth - 14, pageHeight - 8.5, { align: "right" });
-  doc.setTextColor(33, 37, 41);
-}
-
-function addPdfWrappedText(doc, text, x, y, maxWidth, lineHeight = 5, options = {}) {
-  const safeText = text == null ? "" : String(text);
-  const lines = doc.splitTextToSize(safeText, maxWidth);
-  const pageHeight = doc.internal.pageSize.getHeight();
-  const bottomMargin = options.bottomMargin || 18;
-  let cursorY = y;
-
-  lines.forEach((line) => {
-    if (cursorY > pageHeight - bottomMargin) {
-      doc.addPage();
-      if (typeof options.onPageAdd === "function") {
-        cursorY = options.onPageAdd();
-      } else {
-        cursorY = 30;
-      }
-    }
-    doc.text(line, x, cursorY);
-    cursorY += lineHeight;
-  });
-
-  return cursorY;
-}
-
-function ensurePdfSpace(doc, currentY, requiredHeight, onPageAdd) {
-  const pageHeight = doc.internal.pageSize.getHeight();
-  if (currentY + requiredHeight <= pageHeight - 18) return currentY;
-  doc.addPage();
-  return typeof onPageAdd === "function" ? onPageAdd() : 30;
-}
-
-function drawPdfLabelPill(doc, text, x, y, options = {}) {
-  const paddingX = options.paddingX || 2.8;
-  const width = doc.getTextWidth(text) + paddingX * 2;
-  const height = options.height || 6;
-  const radius = options.radius || 3;
-  const fill = options.fill || [240, 244, 248];
-  const textColor = options.textColor || [58, 76, 98];
-  doc.setFillColor(...fill);
-  doc.roundedRect(x, y - 4.6, width, height, radius, radius, 'F');
-  doc.setTextColor(...textColor);
-  doc.text(text, x + paddingX, y);
-  doc.setTextColor(33, 37, 41);
-  return x + width;
-}
-
-function drawPdfMetricCard(doc, x, y, width, title, value, note) {
-  doc.setFillColor(248, 250, 252);
-  doc.setDrawColor(225, 230, 236);
-  doc.roundedRect(x, y, width, 22, 2.5, 2.5, 'FD');
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
-  doc.setTextColor(92, 104, 121);
-  doc.text(title, x + 3, y + 6);
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(15);
-  doc.setTextColor(25, 35, 52);
-  doc.text(String(value), x + 3, y + 13);
-
-  if (note) {
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(7.5);
-    doc.setTextColor(110, 120, 135);
-    const noteLines = doc.splitTextToSize(String(note), width - 6);
-    doc.text(noteLines.slice(0, 2), x + 3, y + 18);
-  }
-
-  doc.setTextColor(33, 37, 41);
-}
-
-function drawPdfSectionBanner(doc, title, subtitle, y) {
-  const pageWidth = doc.internal.pageSize.getWidth();
-  doc.setFillColor(246, 248, 251);
-  doc.roundedRect(14, y, pageWidth - 28, 16, 2.5, 2.5, 'F');
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(12);
-  doc.setTextColor(25, 35, 52);
-  doc.text(title, 18, y + 6.8);
-  if (subtitle) {
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8.5);
-    doc.setTextColor(92, 104, 121);
-    doc.text(subtitle, 18, y + 12.3);
-  }
-  doc.setTextColor(33, 37, 41);
-  return y + 22;
-}
-
-function drawPdfRecommendationCard(doc, item, index, group, layout, normalizedReport) {
-  const { pageWidth, pageHeight, contentWidth } = layout;
-  let y = layout.y;
-
-  const cardPadding = 4;
-  const innerWidth = contentWidth - (cardPadding * 2);
-  const issueText = getIssueText(item);
-  const solutionText = getSolutionText(item);
-  const evidenceText = item.evidence ? String(item.evidence) : "";
-  const destinationUrl = item.url || getRecommendationDestination(item, normalizedReport.pageResults || []);
-  const titleLines = doc.splitTextToSize(`${index + 1}. ${item.title || "Untitled recommendation"}`, innerWidth);
-  const issueLines = doc.splitTextToSize(issueText, innerWidth - 2);
-  const solutionLines = doc.splitTextToSize(solutionText, innerWidth - 2);
-  const evidenceLines = evidenceText ? doc.splitTextToSize(evidenceText, innerWidth - 2) : [];
-  const urlLines = destinationUrl ? doc.splitTextToSize(`Related URL: ${destinationUrl}`, innerWidth - 10) : [];
-  const cardHeight = Math.max(
-    44,
-    18 + (titleLines.length * 5) + 8 + (urlLines.length * 4.3) + 6 + (issueLines.length * 4.5) + 6 + (solutionLines.length * 4.5) + (evidenceLines.length ? 8 + (evidenceLines.length * 4.5) : 0)
-  );
-
-  y = ensurePdfSpace(doc, y, cardHeight + 8, layout.onPageAdd);
-
-  doc.setFillColor(255, 255, 255);
-  doc.setDrawColor(225, 230, 236);
-  doc.roundedRect(14, y, contentWidth, cardHeight, 2.5, 2.5, 'FD');
-
-  let cursorY = y + 8;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  doc.setTextColor(25, 35, 52);
-  doc.text(titleLines, 18, cursorY);
-  cursorY += titleLines.length * 5;
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  let pillX = 18;
-  pillX = drawPdfLabelPill(doc, item.tagLabel || group.label, pillX, cursorY + 2, { fill: [240, 244, 248], textColor: [58, 76, 98] }) + 2;
-  drawPdfLabelPill(doc, `Impact: ${item.impactLabel || "Low"}`, pillX, cursorY + 2, { fill: [246, 240, 230], textColor: [110, 82, 30] });
-  cursorY += 8;
-
-  if (destinationUrl) {
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8.5);
-    doc.setTextColor(92, 104, 121);
-    doc.text(urlLines, 18, cursorY);
-    cursorY += urlLines.length * 4.3 + 2;
-  }
-
-  doc.setDrawColor(235, 238, 242);
-  doc.line(18, cursorY, pageWidth - 18, cursorY);
-  cursorY += 6;
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(9.5);
-  doc.setTextColor(25, 35, 52);
-  doc.text("Issue", 18, cursorY);
-  cursorY += 5;
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.setTextColor(55, 65, 81);
-  doc.text(issueLines, 19, cursorY);
-  cursorY += issueLines.length * 4.5 + 3;
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(9.5);
-  doc.setTextColor(25, 35, 52);
-  doc.text("Recommended action", 18, cursorY);
-  cursorY += 5;
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.setTextColor(55, 65, 81);
-  doc.text(solutionLines, 19, cursorY);
-  cursorY += solutionLines.length * 4.5;
-
-  if (evidenceLines.length) {
-    cursorY += 3;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(9.5);
-    doc.setTextColor(25, 35, 52);
-    doc.text("Evidence", 18, cursorY);
-    cursorY += 5;
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.setTextColor(55, 65, 81);
-    doc.text(evidenceLines, 19, cursorY);
-  }
-
-  doc.setTextColor(33, 37, 41);
-  return y + cardHeight + 6;
-}
-
 function downloadPdfReport(report) {
   const jsPDF = window.jspdf?.jsPDF;
   if (!jsPDF) {
     alert("PDF library could not be loaded.");
     return;
   }
-
-  const normalizedReport = hydrateReportLinks(JSON.parse(JSON.stringify(report || {})));
-  const recommendations = normalizedReport.recommendations || [];
-  const groupedRecommendations = groupRecommendationsForPdf(recommendations);
-  const doc = new jsPDF({ unit: "mm", format: "a4" });
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  const contentWidth = pageWidth - 28;
-  const estimatedRevenue = normalizedReport.revenueOpportunity || estimateRevenueOpportunity(normalizedReport.overallScore, normalizedReport.criticalIssues, normalizedReport.pagesAnalyzed);
-  const generatedAt = formatPdfDate(normalizedReport.generatedAt || Date.now());
-  const appsText = normalizedReport.stackSummary?.apps?.length ? normalizedReport.stackSummary.apps.join(", ") : "No major apps detected";
-  const platformText = normalizedReport.stackSummary?.platform || "Unknown";
-  const themeText = normalizedReport.stackSummary?.theme || "Unknown";
-  const domainText = normalizedReport.domain || normalizedReport.baseUrl || normalizedReport.website || normalizedReport.homePageUrl || "Website not specified";
-  const totalRecommendationCount = recommendations.length;
-  const highestImpactCount = recommendations.filter((item) => impactRank(item?.impactLabel || "Low") >= impactRank("High")).length;
-  const sectionPageMap = [];
-
-  doc.setFillColor(248, 250, 252);
-  doc.rect(0, 0, pageWidth, pageHeight, 'F');
-  doc.setFillColor(25, 35, 52);
-  doc.rect(0, 0, pageWidth, 56, 'F');
-  doc.setFillColor(236, 240, 245);
-  doc.roundedRect(14, 66, pageWidth - 28, 44, 3, 3, 'F');
-
-  doc.setTextColor(255, 255, 255);
+  const doc = new jsPDF();
+  const lines = [
+    report.projectName,
+    `Plan: ${report.plan.toUpperCase()}`,
+    `Public storefront CRO Score: ${report.overallScore}/100`,
+    `Critical issues: ${report.criticalIssues}`,
+    `Pages analyzed: ${report.pagesAnalyzed}`,
+    `Estimated revenue opportunity: ${report.revenueOpportunity || estimateRevenueOpportunity(report.overallScore, report.criticalIssues, report.pagesAnalyzed)}%`,
+    report.stackSummary?.platform ? `Platform: ${report.stackSummary.platform}` : "",
+    report.stackSummary?.apps?.length ? `Apps: ${report.stackSummary.apps.join(', ')}` : "",
+    "",
+    "Top recommendations:"
+  ].filter(Boolean);
+  (report.recommendations || []).forEach((item, index) => {
+    lines.push(`${index + 1}. ${item.title}`);
+    lines.push(`Issue: ${getIssueText(item)}`);
+    lines.push(`Solution: ${getSolutionText(item)}`);
+    lines.push("");
+  });
+  let y = 20;
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(24);
-  doc.text(normalizedReport.projectName || "CRO Analysis Report", 14, 24);
-  doc.setFontSize(11);
+  doc.setFontSize(18);
+  doc.text(report.projectName, 14, y);
+  y += 10;
   doc.setFont("helvetica", "normal");
-  doc.text("Conversion Rate Optimization Analysis Report", 14, 33);
-  doc.setFontSize(8.5);
-  doc.text(`Generated ${generatedAt}`, 14, 40);
-
-  doc.setTextColor(33, 37, 41);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  doc.text("Document summary", 18, 74);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  const coverSummaryLines = [
-    `Storefront: ${domainText}`,
-    `Plan: ${String(normalizedReport.plan || "free").toUpperCase()}  •  Platform: ${platformText}  •  Theme: ${themeText}`,
-    `Apps detected: ${appsText}`
-  ];
-  doc.text(coverSummaryLines, 18, 82);
-
-  const metricY = 121;
-  const gap = 4;
-  const cardWidth = (contentWidth - (gap * 3)) / 4;
-  drawPdfMetricCard(doc, 14, metricY, cardWidth, "CRO score", `${normalizedReport.overallScore || 0}/100`, "Public storefront score");
-  drawPdfMetricCard(doc, 14 + cardWidth + gap, metricY, cardWidth, "Critical issues", normalizedReport.criticalIssues || 0, "Highest-priority fixes");
-  drawPdfMetricCard(doc, 14 + ((cardWidth + gap) * 2), metricY, cardWidth, "Recommendations", totalRecommendationCount, "Total report recommendations");
-  drawPdfMetricCard(doc, 14 + ((cardWidth + gap) * 3), metricY, cardWidth, "Revenue uplift", `${estimatedRevenue}%`, "Estimated upside opportunity");
-
-  let y = 154;
-  y = drawPdfSectionBanner(doc, "Recommendation groups", "Sections are organized by page tag for easier review and implementation.", y);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.setTextColor(55, 65, 81);
-  groupedRecommendations.forEach((group) => {
-    doc.text(`• ${group.label}: ${group.items.length} recommendation${group.items.length === 1 ? "" : "s"}`, 18, y);
-    y += 6;
+  doc.setFontSize(10);
+  lines.slice(1).forEach((line) => {
+    const wrapped = doc.splitTextToSize(line, 180);
+    if (y > 275) { doc.addPage(); y = 20; }
+    doc.text(wrapped, 14, y);
+    y += (wrapped.length * 6);
   });
-
-  y += 4;
-  y = drawPdfSectionBanner(doc, "Review guidance", "Start with the sections that have the most recommendations or highest-impact actions.", y);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.setTextColor(55, 65, 81);
-  const guidanceLines = doc.splitTextToSize(
-    `This report was generated from your current storefront and groups findings by page type. Prioritize the ${highestImpactCount} highest-impact recommendation${highestImpactCount === 1 ? "" : "s"} first, then move through each section in the order shown in the table of contents.`,
-    contentWidth - 8
-  );
-  doc.text(guidanceLines, 18, y);
-  doc.setTextColor(33, 37, 41);
-
-  doc.addPage();
-  drawPdfHeader(doc, "Table of contents", normalizedReport.projectName || "CRO Analysis Report");
-  y = 32;
-  y = drawPdfSectionBanner(doc, "Main sections", "Use this page to jump through the report structure quickly.", y);
-
-  const tocEntries = [];
-  const addTocLine = (label, level = 0, pageNumber = "") => {
-    if (y > pageHeight - 24) {
-      doc.addPage();
-      drawPdfHeader(doc, "Table of contents", normalizedReport.projectName || "CRO Analysis Report");
-      y = 32;
-    }
-    const entryY = y;
-    const indent = 18 + (level * 6);
-    doc.setFont("helvetica", level === 0 ? "bold" : "normal");
-    doc.setFontSize(level === 0 ? 10 : 9);
-    doc.setTextColor(level === 0 ? 25 : 55, level === 0 ? 35 : 65, level === 0 ? 52 : 81);
-    doc.text(label, indent, entryY);
-    if (pageNumber) {
-      doc.text(String(pageNumber), pageWidth - 18, entryY, { align: "right" });
-    }
-    if (!pageNumber) {
-      tocEntries.push({ page: doc.getNumberOfPages(), y: entryY, label, level });
-    }
-    y += level === 0 ? 8 : 6;
-  };
-
-  addTocLine("Cover page", 0, 1);
-  addTocLine("Table of contents", 0, 2);
-  addTocLine("Executive summary", 0);
-  addTocLine("Recommendations by tag", 0);
-  groupedRecommendations.forEach((group) => {
-    addTocLine(`${group.label}`, 1);
-  });
-
-  doc.addPage();
-  let executiveSummaryPage = doc.getNumberOfPages();
-  drawPdfHeader(doc, "Executive summary", normalizedReport.projectName || "CRO Analysis Report");
-  y = 32;
-  y = drawPdfSectionBanner(doc, "Overview", "Key metrics and implementation priorities.", y);
-
-  drawPdfMetricCard(doc, 14, y, (contentWidth - 8) / 3, "Pages analyzed", normalizedReport.pagesAnalyzed || 0, "Pages included in this run");
-  drawPdfMetricCard(doc, 14 + ((contentWidth - 8) / 3) + 4, y, (contentWidth - 8) / 3, "High-impact items", highestImpactCount, "Recommended to address first");
-  drawPdfMetricCard(doc, 14 + (((contentWidth - 8) / 3) + 4) * 2, y, (contentWidth - 8) / 3, "Recommendation groups", groupedRecommendations.length, "Distinct page-type sections");
-  y += 30;
-
-  y = drawPdfSectionBanner(doc, "Store and stack context", "Reference details captured during analysis.", y);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9.5);
-  doc.setTextColor(55, 65, 81);
-  [
-    `Storefront: ${domainText}`,
-    `Platform: ${platformText}`,
-    `Theme: ${themeText}`,
-    `Apps detected: ${appsText}`
-  ].forEach((line) => {
-    doc.text(line, 18, y);
-    y += 6;
-  });
-
-  y += 2;
-  y = drawPdfSectionBanner(doc, "Recommendation distribution", "Recommendation count by tag.", y);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9.5);
-  groupedRecommendations.forEach((group) => {
-    doc.setFillColor(255, 255, 255);
-    doc.setDrawColor(230, 234, 239);
-    doc.roundedRect(18, y - 4.5, contentWidth - 8, 8, 2, 2, 'FD');
-    doc.setTextColor(25, 35, 52);
-    doc.text(group.label, 22, y + 0.8);
-    doc.setTextColor(92, 104, 121);
-    doc.text(`${group.items.length} recommendation${group.items.length === 1 ? "" : "s"}`, pageWidth - 22, y + 0.8, { align: "right" });
-    y += 10;
-  });
-  doc.setTextColor(33, 37, 41);
-
-  const recommendationsSectionPage = doc.getNumberOfPages() + 1;
-  groupedRecommendations.forEach((group) => {
-    doc.addPage();
-    const groupPage = doc.getNumberOfPages();
-    sectionPageMap.push({ key: group.key, label: group.label, pageNumber: groupPage });
-
-    drawPdfHeader(doc, group.label, `${group.items.length} recommendation${group.items.length === 1 ? "" : "s"}`);
-    y = 32;
-    y = drawPdfSectionBanner(doc, group.label, `Recommendations in this section are related to the ${group.label.toLowerCase()} experience.`, y);
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9.2);
-    doc.setTextColor(55, 65, 81);
-    const introText = doc.splitTextToSize(
-      `Review this section to improve clarity, trust, and conversion performance on ${group.label.toLowerCase()}s. Items are ordered by impact first and then alphabetically for easier implementation planning.`,
-      contentWidth - 8
-    );
-    doc.text(introText, 18, y);
-    y += introText.length * 4.4 + 6;
-    doc.setTextColor(33, 37, 41);
-
-    const layout = {
-      y,
-      pageWidth,
-      pageHeight,
-      contentWidth,
-      onPageAdd: () => {
-        drawPdfHeader(doc, group.label, `${group.items.length} recommendation${group.items.length === 1 ? "" : "s"}`);
-        return 30;
-      }
-    };
-
-    group.items.forEach((item, index) => {
-      layout.y = drawPdfRecommendationCard(doc, item, index, group, layout, normalizedReport);
-    });
-  });
-
-  const totalPages = doc.getNumberOfPages();
-  const tocPageNumbers = {
-    "Executive summary": executiveSummaryPage,
-    "Recommendations by tag": recommendationsSectionPage
-  };
-  groupedRecommendations.forEach((group) => {
-    const match = sectionPageMap.find((entry) => entry.key === group.key);
-    tocPageNumbers[group.label] = match?.pageNumber || "";
-  });
-
-  tocEntries.forEach((entry) => {
-    doc.setPage(entry.page);
-    doc.setFont("helvetica", entry.level === 0 ? "bold" : "normal");
-    doc.setFontSize(entry.level === 0 ? 10 : 9);
-    doc.setTextColor(entry.level === 0 ? 25 : 55, entry.level === 0 ? 35 : 65, entry.level === 0 ? 52 : 81);
-    const pageNumber = tocPageNumbers[entry.label] || "";
-    if (pageNumber) {
-      doc.text(String(pageNumber), pageWidth - 18, entry.y, { align: "right" });
-    }
-  });
-
-  for (let pageNumber = 1; pageNumber <= totalPages; pageNumber += 1) {
-    doc.setPage(pageNumber);
-    drawPdfFooter(doc, pageNumber, totalPages, normalizedReport.projectName || "CRO Analysis Report");
-  }
-
-  doc.save(`${slugify(normalizedReport.projectName)}-report.pdf`);
+  doc.save(`${slugify(report.projectName)}-report.pdf`);
 }
 
 function downloadStoredReport(reportId) {
@@ -4126,6 +3915,48 @@ function escapeHtml(value) {
 
 
 
+let analysisTimeoutModalInstance = null;
+
+function ensureAnalysisTimeoutModal() {
+  if (analysisTimeoutModalInstance) return;
+
+  analysisTimeoutModalInstance = document.createElement("div");
+  analysisTimeoutModalInstance.id = "analysisTimeoutModal";
+  analysisTimeoutModalInstance.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(8,12,20,0.62);backdrop-filter:blur(6px);"></div>
+    <div role="dialog" aria-modal="true" aria-labelledby="analysisTimeoutModalTitle" style="position:relative;z-index:1;width:min(92vw,520px);background:#111827;color:#f9fafb;border:1px solid rgba(255,255,255,0.08);border-radius:20px;box-shadow:0 24px 80px rgba(0,0,0,0.35);padding:28px 24px 22px;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;">
+        <div>
+          <h3 id="analysisTimeoutModalTitle" style="margin:0 0 10px;font-size:1.2rem;line-height:1.3;">Analysis not completed</h3>
+          <p data-timeout-message style="margin:0;color:rgba(249,250,251,0.84);line-height:1.6;">Please try again. The analysis could not be completed within the allowed time.</p>
+        </div>
+        <button type="button" aria-label="Close" data-timeout-close style="flex:none;border:0;background:rgba(255,255,255,0.08);color:#f9fafb;width:36px;height:36px;border-radius:999px;font-size:1.15rem;cursor:pointer;">×</button>
+      </div>
+      <div style="margin-top:22px;display:flex;justify-content:flex-end;">
+        <button type="button" data-timeout-close style="border:0;background:#f9fafb;color:#111827;padding:10px 16px;border-radius:999px;font-weight:600;cursor:pointer;">OK</button>
+      </div>
+    </div>
+  `;
+  Object.assign(analysisTimeoutModalInstance.style, {
+    position: "fixed",
+    inset: "0",
+    zIndex: "9999",
+    display: "none",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "24px"
+  });
+  document.body.appendChild(analysisTimeoutModalInstance);
+
+  analysisTimeoutModalInstance.addEventListener("click", (event) => {
+    if (event.target === analysisTimeoutModalInstance || event.target.hasAttribute("data-timeout-close")) {
+      hideAnalysisTimeoutPopup();
+    }
+  });
+}
+
+
+
 let screenshotModalInstance = null;
 let screenshotModalImage = null;
 
@@ -4197,10 +4028,13 @@ document.addEventListener("mouseover", (e) => {
 
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && screenshotModalInstance) {
-    screenshotModalInstance.classList.remove("visible", "loaded");
-    if (screenshotModalImage) {
-      screenshotModalImage.removeAttribute("src");
+  if (e.key === "Escape") {
+    hideAnalysisTimeoutPopup();
+    if (screenshotModalInstance) {
+      screenshotModalInstance.classList.remove("visible", "loaded");
+      if (screenshotModalImage) {
+        screenshotModalImage.removeAttribute("src");
+      }
     }
   }
 });
