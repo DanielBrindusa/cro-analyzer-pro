@@ -4,7 +4,10 @@ const STATE = {
   plan: "free",
   latestReport: null,
   productRows: 0,
-  progress: null
+  progress: null,
+  notifyAudio: null,
+  notifyAudioUnlocked: false,
+  completionSoundPlayed: false
 };
 
 const PRO_PAYMENT_LINK = "REPLACE_WITH_YOUR_STRIPE_PAYMENT_LINK";
@@ -97,6 +100,73 @@ const DEFAULT_AD_CONFIG = {
 };
 
 let AD_CONFIG = JSON.parse(JSON.stringify(DEFAULT_AD_CONFIG));
+
+function getNotifyAudio() {
+  if (!STATE.notifyAudio) {
+    STATE.notifyAudio = new Audio("misc/notify.mp3");
+    STATE.notifyAudio.preload = "auto";
+  }
+  return STATE.notifyAudio;
+}
+
+function prepareNotifyAudio() {
+  try {
+    const audio = getNotifyAudio();
+    audio.load();
+  } catch (error) {
+    console.warn("Notify audio could not be prepared.", error);
+  }
+}
+
+async function unlockNotifyAudio() {
+  if (STATE.notifyAudioUnlocked) return true;
+
+  try {
+    const audio = getNotifyAudio();
+    audio.muted = true;
+    audio.currentTime = 0;
+    const playResult = audio.play();
+    if (playResult && typeof playResult.then === "function") {
+      await playResult;
+    }
+    audio.pause();
+    audio.currentTime = 0;
+    audio.muted = false;
+    STATE.notifyAudioUnlocked = true;
+    return true;
+  } catch (error) {
+    try {
+      const audio = getNotifyAudio();
+      audio.pause();
+      audio.currentTime = 0;
+      audio.muted = false;
+    } catch (_) {}
+    console.warn("Notify audio could not be unlocked. Playback may depend on browser permissions.", error);
+    return false;
+  }
+}
+
+function playCompletionSound() {
+  if (STATE.completionSoundPlayed) return;
+  STATE.completionSoundPlayed = true;
+
+  try {
+    const audio = getNotifyAudio();
+    audio.pause();
+    audio.currentTime = 0;
+    audio.muted = false;
+    const playResult = audio.play();
+    if (playResult && typeof playResult.catch === "function") {
+      playResult.catch((error) => {
+        console.warn("Notify audio playback was blocked or failed.", error);
+        STATE.completionSoundPlayed = false;
+      });
+    }
+  } catch (error) {
+    console.warn("Notify audio playback failed.", error);
+    STATE.completionSoundPlayed = false;
+  }
+}
 
 const AUTOMATED_CHECKS = {
   general: [
@@ -560,6 +630,7 @@ async function runAnalysis() {
 
   analyzeButton.disabled = true;
   if (discoverButton) discoverButton.disabled = true;
+  await unlockNotifyAudio();
   startProgress(estimatedTotalUnits, { maxRuntimeMs: ANALYSIS_MAX_RUNTIME_MS });
   setProgressPhase(shouldRunDiscovery ? "Discovery" : "Analysis");
   updateProgress(0.3, estimatedTotalUnits, shouldRunDiscovery
@@ -768,6 +839,8 @@ function revealAnalysisProgress() {
 function startProgress(totalSteps, options = {}) {
   const panel = document.getElementById("analysisProgress");
   panel.classList.remove("hidden");
+  STATE.completionSoundPlayed = false;
+  prepareNotifyAudio();
   STATE.progress = {
     startedAt: Date.now(),
     totalUnits: Math.max(Number(totalSteps) || 1, 1),
@@ -805,6 +878,7 @@ function completeProgress(statusText) {
     STATE.progress.baseStatus = statusText;
   }
   setProgressValue(100, "Analysis complete", statusText);
+  playCompletionSound();
   revealAnalysisProgress();
 }
 
