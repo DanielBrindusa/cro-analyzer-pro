@@ -806,9 +806,13 @@ async function runAnalysis() {
     completeProgress(`Analysis complete. ${report.pagesAnalyzed} page${report.pagesAnalyzed === 1 ? "" : "s"} processed.`);
   } catch (error) {
     const timeoutHit = String(error?.message || "").includes("maximum runtime") || String(error?.message || "").includes("exceeded the maximum runtime");
+    const timeoutMessage = `Please try again. The analysis could not be completed within ${formatDuration(ANALYSIS_MAX_RUNTIME_MS)}.`;
     failProgress(timeoutHit
       ? `The analysis reached the ${formatDuration(ANALYSIS_MAX_RUNTIME_MS)} time limit before finishing. Try fewer pages or rerun the audit.`
       : "The analysis stopped unexpectedly. Please try again.");
+    if (timeoutHit) {
+      showAnalysisTimeoutPopup(timeoutMessage);
+    }
     console.error(error);
   } finally {
     analyzeButton.disabled = false;
@@ -839,6 +843,7 @@ function revealAnalysisProgress() {
 function startProgress(totalSteps, options = {}) {
   const panel = document.getElementById("analysisProgress");
   panel.classList.remove("hidden");
+  hideAnalysisTimeoutPopup();
   STATE.completionSoundPlayed = false;
   prepareNotifyAudio();
   STATE.progress = {
@@ -893,6 +898,23 @@ function failProgress(statusText) {
   }
   setProgressValue(100, "Analysis failed", statusText);
   revealAnalysisProgress();
+}
+
+function showAnalysisTimeoutPopup(message) {
+  ensureAnalysisTimeoutModal();
+  if (!analysisTimeoutModalInstance) return;
+  const messageNode = analysisTimeoutModalInstance.querySelector("[data-timeout-message]");
+  if (messageNode) {
+    messageNode.textContent = message || "Please try again. The analysis could not be completed within the allowed time.";
+  }
+  analysisTimeoutModalInstance.style.display = "flex";
+  analysisTimeoutModalInstance.classList.add("visible");
+}
+
+function hideAnalysisTimeoutPopup() {
+  if (!analysisTimeoutModalInstance) return;
+  analysisTimeoutModalInstance.classList.remove("visible");
+  analysisTimeoutModalInstance.style.display = "none";
 }
 
 function setProgressValue(percent, titleText, statusText) {
@@ -3819,6 +3841,48 @@ function escapeHtml(value) {
 
 
 
+let analysisTimeoutModalInstance = null;
+
+function ensureAnalysisTimeoutModal() {
+  if (analysisTimeoutModalInstance) return;
+
+  analysisTimeoutModalInstance = document.createElement("div");
+  analysisTimeoutModalInstance.id = "analysisTimeoutModal";
+  analysisTimeoutModalInstance.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(8,12,20,0.62);backdrop-filter:blur(6px);"></div>
+    <div role="dialog" aria-modal="true" aria-labelledby="analysisTimeoutModalTitle" style="position:relative;z-index:1;width:min(92vw,520px);background:#111827;color:#f9fafb;border:1px solid rgba(255,255,255,0.08);border-radius:20px;box-shadow:0 24px 80px rgba(0,0,0,0.35);padding:28px 24px 22px;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;">
+        <div>
+          <h3 id="analysisTimeoutModalTitle" style="margin:0 0 10px;font-size:1.2rem;line-height:1.3;">Analysis not completed</h3>
+          <p data-timeout-message style="margin:0;color:rgba(249,250,251,0.84);line-height:1.6;">Please try again. The analysis could not be completed within the allowed time.</p>
+        </div>
+        <button type="button" aria-label="Close" data-timeout-close style="flex:none;border:0;background:rgba(255,255,255,0.08);color:#f9fafb;width:36px;height:36px;border-radius:999px;font-size:1.15rem;cursor:pointer;">×</button>
+      </div>
+      <div style="margin-top:22px;display:flex;justify-content:flex-end;">
+        <button type="button" data-timeout-close style="border:0;background:#f9fafb;color:#111827;padding:10px 16px;border-radius:999px;font-weight:600;cursor:pointer;">OK</button>
+      </div>
+    </div>
+  `;
+  Object.assign(analysisTimeoutModalInstance.style, {
+    position: "fixed",
+    inset: "0",
+    zIndex: "9999",
+    display: "none",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "24px"
+  });
+  document.body.appendChild(analysisTimeoutModalInstance);
+
+  analysisTimeoutModalInstance.addEventListener("click", (event) => {
+    if (event.target === analysisTimeoutModalInstance || event.target.hasAttribute("data-timeout-close")) {
+      hideAnalysisTimeoutPopup();
+    }
+  });
+}
+
+
+
 let screenshotModalInstance = null;
 let screenshotModalImage = null;
 
@@ -3890,10 +3954,13 @@ document.addEventListener("mouseover", (e) => {
 
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && screenshotModalInstance) {
-    screenshotModalInstance.classList.remove("visible", "loaded");
-    if (screenshotModalImage) {
-      screenshotModalImage.removeAttribute("src");
+  if (e.key === "Escape") {
+    hideAnalysisTimeoutPopup();
+    if (screenshotModalInstance) {
+      screenshotModalInstance.classList.remove("visible", "loaded");
+      if (screenshotModalImage) {
+        screenshotModalImage.removeAttribute("src");
+      }
     }
   }
 });
