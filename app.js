@@ -3742,45 +3742,278 @@ function downloadStoredReportPdf(reportId) {
   downloadPdfReport(report);
 }
 
+function sanitizePdfText(value) {
+  return String(value == null ? "" : value)
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[•]/g, '-')
+    .replace(/[–—]/g, '-')
+    .replace(/[ ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getPdfReportPreparedData(report) {
+  const hydratedReport = hydrateReportLinks(JSON.parse(JSON.stringify(report || {})));
+  const recommendations = [...(hydratedReport.recommendations || [])].sort(compareRecommendations);
+  const groups = groupRecommendationsByPage(recommendations);
+  const revenueOpportunity = hydratedReport.revenueOpportunity || estimateRevenueOpportunity(
+    hydratedReport.overallScore,
+    hydratedReport.criticalIssues,
+    hydratedReport.pagesAnalyzed
+  );
+
+  return {
+    report: hydratedReport,
+    recommendations,
+    groups,
+    revenueOpportunity
+  };
+}
+
+function drawPdfHeader(doc, title, subtitle) {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  doc.setFillColor(15, 23, 42);
+  doc.rect(0, 0, pageWidth, 32, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(20);
+  doc.text(sanitizePdfText(title), 14, 15);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(sanitizePdfText(subtitle), 14, 23);
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.4);
+  doc.line(14, 35, pageWidth - 14, 35);
+  doc.setTextColor(33, 37, 41);
+}
+
+function drawPdfFooter(doc) {
+  const pageCount = doc.internal.getNumberOfPages();
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+
+  for (let page = 1; page <= pageCount; page += 1) {
+    doc.setPage(page);
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.3);
+    doc.line(14, pageHeight - 14, pageWidth - 14, pageHeight - 14);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(100, 116, 139);
+    doc.text('CRO Website Analyzer Report', 14, pageHeight - 8);
+    doc.text(`Page ${page} of ${pageCount}`, pageWidth - 14, pageHeight - 8, { align: 'right' });
+  }
+  doc.setTextColor(33, 37, 41);
+}
+
+function ensurePdfSpace(doc, y, neededHeight, headerTitle, headerSubtitle) {
+  const pageHeight = doc.internal.pageSize.getHeight();
+  if (y + neededHeight <= pageHeight - 22) return y;
+  doc.addPage();
+  drawPdfHeader(doc, headerTitle, headerSubtitle);
+  return 42;
+}
+
+function addPdfWrappedText(doc, text, x, y, maxWidth, lineHeight, options = {}) {
+  const safeText = sanitizePdfText(text);
+  const lines = doc.splitTextToSize(safeText || ' ', maxWidth);
+  const height = Math.max(lineHeight, lines.length * lineHeight);
+  const alignedY = ensurePdfSpace(doc, y, height + (options.bottomGap || 0), options.headerTitle, options.headerSubtitle);
+  doc.text(lines, x, alignedY, options.textOptions || {});
+  return alignedY + height + (options.bottomGap || 0);
+}
+
+function drawPdfStatCard(doc, x, y, w, h, label, value) {
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.roundedRect(x, y, w, h, 4, 4, 'FD');
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text(sanitizePdfText(label).toUpperCase(), x + 4, y + 7);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(16);
+  doc.setTextColor(15, 23, 42);
+  doc.text(sanitizePdfText(String(value)), x + 4, y + 16);
+  doc.setTextColor(33, 37, 41);
+}
+
+function drawPdfTag(doc, text, x, y) {
+  const label = sanitizePdfText(text).toUpperCase();
+  const width = Math.min(60, doc.getTextWidth(label) + 10);
+  doc.setFillColor(239, 246, 255);
+  doc.setDrawColor(147, 197, 253);
+  doc.roundedRect(x, y - 4, width, 7, 3, 3, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(30, 64, 175);
+  doc.text(label, x + 5, y);
+  doc.setTextColor(33, 37, 41);
+  return width;
+}
+
 function downloadPdfReport(report) {
   const jsPDF = window.jspdf?.jsPDF;
   if (!jsPDF) {
-    alert("PDF library could not be loaded.");
+    alert('PDF library could not be loaded.');
     return;
   }
-  const doc = new jsPDF();
-  const lines = [
-    report.projectName,
-    `Plan: ${report.plan.toUpperCase()}`,
-    `Public storefront CRO Score: ${report.overallScore}/100`,
-    `Critical issues: ${report.criticalIssues}`,
-    `Pages analyzed: ${report.pagesAnalyzed}`,
-    `Estimated revenue opportunity: ${report.revenueOpportunity || estimateRevenueOpportunity(report.overallScore, report.criticalIssues, report.pagesAnalyzed)}%`,
-    report.stackSummary?.platform ? `Platform: ${report.stackSummary.platform}` : "",
-    report.stackSummary?.apps?.length ? `Apps: ${report.stackSummary.apps.join(', ')}` : "",
-    "",
-    "Top recommendations:"
-  ].filter(Boolean);
-  (report.recommendations || []).forEach((item, index) => {
-    lines.push(`${index + 1}. ${item.title}`);
-    lines.push(`Issue: ${getIssueText(item)}`);
-    lines.push(`Solution: ${getSolutionText(item)}`);
-    lines.push("");
-  });
-  let y = 20;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(18);
-  doc.text(report.projectName, 14, y);
-  y += 10;
-  doc.setFont("helvetica", "normal");
+
+  const prepared = getPdfReportPreparedData(report);
+  const { report: hydratedReport, recommendations, groups, revenueOpportunity } = prepared;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const headerTitle = hydratedReport.projectName || 'CRO Audit Report';
+  const createdOn = hydratedReport.createdAt ? new Date(hydratedReport.createdAt) : new Date();
+  const headerSubtitle = `Generated ${createdOn.toLocaleDateString()} • Professional CRO audit summary`;
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const contentWidth = pageWidth - 28;
+  let y = 42;
+
+  drawPdfHeader(doc, headerTitle, headerSubtitle);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text('Executive summary', 14, y);
+  y += 6;
+
+  const statCardWidth = (contentWidth - 8) / 2;
+  drawPdfStatCard(doc, 14, y, statCardWidth, 20, 'CRO Score', `${hydratedReport.overallScore || 0}/100`);
+  drawPdfStatCard(doc, 18 + statCardWidth, y, statCardWidth, 20, 'Critical issues', hydratedReport.criticalIssues || 0);
+  y += 24;
+  drawPdfStatCard(doc, 14, y, statCardWidth, 20, 'Pages analyzed', hydratedReport.pagesAnalyzed || 0);
+  drawPdfStatCard(doc, 18 + statCardWidth, y, statCardWidth, 20, 'Revenue opportunity', `${revenueOpportunity || 0}%`);
+  y += 27;
+
+  doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
-  lines.slice(1).forEach((line) => {
-    const wrapped = doc.splitTextToSize(line, 180);
-    if (y > 275) { doc.addPage(); y = 20; }
-    doc.text(wrapped, 14, y);
-    y += (wrapped.length * 6);
+  const summaryLines = [
+    hydratedReport.plan ? `Plan: ${String(hydratedReport.plan).toUpperCase()}` : '',
+    hydratedReport.stackSummary?.platform ? `Platform: ${hydratedReport.stackSummary.platform}` : '',
+    hydratedReport.stackSummary?.theme ? `Theme: ${hydratedReport.stackSummary.theme}` : '',
+    hydratedReport.stackSummary?.apps?.length ? `Detected apps: ${hydratedReport.stackSummary.apps.join(', ')}` : '',
+    hydratedReport.manualNotes ? `Notes: ${hydratedReport.manualNotes}` : ''
+  ].filter(Boolean);
+
+  summaryLines.forEach((line) => {
+    y = addPdfWrappedText(doc, line, 14, y, contentWidth, 4.8, {
+      bottomGap: 1.5,
+      headerTitle,
+      headerSubtitle
+    });
   });
-  doc.save(`${slugify(report.projectName)}-report.pdf`);
+
+  y += 2;
+  y = ensurePdfSpace(doc, y, 18, headerTitle, headerSubtitle);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text('Table of contents', 14, y);
+  y += 7;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  if (!groups.length) {
+    y = addPdfWrappedText(doc, 'No recommendations were available for this report.', 14, y, contentWidth, 5, {
+      headerTitle,
+      headerSubtitle
+    });
+  } else {
+    groups.forEach((group, index) => {
+      y = ensurePdfSpace(doc, y, 8, headerTitle, headerSubtitle);
+      const label = `${index + 1}. ${group.label}`;
+      doc.text(sanitizePdfText(label), 16, y);
+      doc.setTextColor(100, 116, 139);
+      doc.text(`${group.items.length} recommendation${group.items.length === 1 ? '' : 's'}`, pageWidth - 14, y, { align: 'right' });
+      doc.setTextColor(33, 37, 41);
+      y += 6;
+    });
+  }
+
+  if (recommendations.length) {
+    doc.addPage();
+    drawPdfHeader(doc, headerTitle, headerSubtitle);
+    y = 42;
+
+    groups.forEach((group, groupIndex) => {
+      y = ensurePdfSpace(doc, y, 18, headerTitle, headerSubtitle);
+      doc.setFillColor(248, 250, 252);
+      doc.setDrawColor(226, 232, 240);
+      doc.roundedRect(14, y - 5, contentWidth, 11, 4, 4, 'FD');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12);
+      doc.text(`${groupIndex + 1}. ${sanitizePdfText(group.label)}`, 18, y + 1.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(100, 116, 139);
+      doc.text(`${group.items.length} item${group.items.length === 1 ? '' : 's'}`, pageWidth - 18, y + 1.5, { align: 'right' });
+      doc.setTextColor(33, 37, 41);
+      y += 12;
+
+      group.items.forEach((item, itemIndex) => {
+        const estimatedHeight = 42;
+        y = ensurePdfSpace(doc, y, estimatedHeight, headerTitle, headerSubtitle);
+        doc.setDrawColor(226, 232, 240);
+        doc.setFillColor(255, 255, 255);
+        doc.roundedRect(14, y - 4, contentWidth, 6, 3, 3, 'S');
+
+        const tagWidth = drawPdfTag(doc, item.pageLabel || group.label, 16, y);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(11);
+        const titleX = 18 + tagWidth;
+        const titleWidth = pageWidth - titleX - 14;
+        const titleLines = doc.splitTextToSize(`${group.startIndex + itemIndex + 1}. ${sanitizePdfText(item.title || 'Recommendation')}`, titleWidth);
+        doc.text(titleLines, titleX, y);
+        y += Math.max(6, titleLines.length * 4.8);
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.text('Issue', 16, y);
+        y += 4.5;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        y = addPdfWrappedText(doc, getIssueText(item), 16, y, contentWidth - 4, 4.8, {
+          bottomGap: 1.5,
+          headerTitle,
+          headerSubtitle
+        });
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.text('Solution', 16, y);
+        y += 4.5;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        y = addPdfWrappedText(doc, getSolutionText(item), 16, y, contentWidth - 4, 4.8, {
+          bottomGap: 1.5,
+          headerTitle,
+          headerSubtitle
+        });
+
+        const metaParts = [
+          item.impactLabel ? `Impact: ${item.impactLabel}` : '',
+          item.confidence ? `Confidence: ${item.confidence}` : '',
+          item.url ? `URL: ${item.url}` : ''
+        ].filter(Boolean);
+
+        if (metaParts.length) {
+          doc.setFont('helvetica', 'italic');
+          doc.setFontSize(8.5);
+          doc.setTextColor(100, 116, 139);
+          y = addPdfWrappedText(doc, metaParts.join(' • '), 16, y, contentWidth - 4, 4.2, {
+            bottomGap: 3,
+            headerTitle,
+            headerSubtitle
+          });
+          doc.setTextColor(33, 37, 41);
+        } else {
+          y += 2;
+        }
+      });
+    });
+  }
+
+  drawPdfFooter(doc);
+  doc.save(`${slugify(hydratedReport.projectName || 'cro-report')}-report.pdf`);
 }
 
 function downloadStoredReport(reportId) {
