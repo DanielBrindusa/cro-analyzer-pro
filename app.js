@@ -3748,6 +3748,16 @@ function downloadPdfReport(report) {
     alert("PDF library could not be loaded.");
     return;
   }
+
+  const normalizedRecommendations = (report.recommendations || []).map((item) => {
+    const page = getNormalizedRecommendationPage(item);
+    return {
+      ...item,
+      page,
+      pageLabel: item.pageLabel || PAGE_LABELS[page] || RECOMMENDATION_GROUP_LABELS[page] || "General"
+    };
+  });
+
   const doc = new jsPDF();
   const lines = [
     report.projectName,
@@ -3761,12 +3771,15 @@ function downloadPdfReport(report) {
     "",
     "Top recommendations:"
   ].filter(Boolean);
-  (report.recommendations || []).forEach((item, index) => {
+
+  normalizedRecommendations.forEach((item, index) => {
     lines.push(`${index + 1}. ${item.title}`);
+    lines.push(`Tag: ${item.pageLabel}`);
     lines.push(`Issue: ${getIssueText(item)}`);
     lines.push(`Solution: ${getSolutionText(item)}`);
     lines.push("");
   });
+
   let y = 20;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(18);
