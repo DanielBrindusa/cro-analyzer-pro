@@ -908,3 +908,63 @@ canvas{
 .seo-mini-links{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px;}
 .seo-mini-links a{display:inline-flex;align-items:center;padding:9px 12px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:#e9eeff;text-decoration:none;font-size:13px;}
 .seo-mini-links a:hover{background:rgba(255,255,255,.09);}
+
+/* ── Recommendation filter bar ── */
+.rec-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.rec-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line, rgba(255,255,255,0.12));
+  background: rgba(255, 255, 255, 0.05);
+  color: #c8d4f8;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.rec-filter-btn:hover {
+  background: rgba(255, 255, 255, 0.10);
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #e9eeff;
+}
+
+.rec-filter-btn.rec-filter-active {
+  background: linear-gradient(135deg, rgba(99,102,241,0.55) 0%, rgba(139,92,246,0.55) 100%);
+  border-color: rgba(139,92,246,0.6);
+  color: #fff;
+  font-weight: 600;
+}
+
+.rec-filter-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.15);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.rec-filter-active .rec-filter-count {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Hide filtered-out cards */
+.rec-card.rec-hidden {
+  display: none;
+}

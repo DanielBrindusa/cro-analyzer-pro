@@ -2060,10 +2060,50 @@ function renderInspectionQuality(report) {
 
 function renderRecommendations(recommendations) {
   const container = document.getElementById("recommendations");
+  const filtersContainer = document.getElementById("recFilters");
+
   if (!recommendations.length) {
     container.className = "recommendation-list empty-state";
     container.textContent = "No recommendations yet.";
+    if (filtersContainer) filtersContainer.innerHTML = "";
     return;
+  }
+
+  // Build ordered unique page labels (preserve display order from PAGE_LABELS)
+  const labelOrder = Object.values(PAGE_LABELS);
+  const presentLabels = [...new Set(recommendations.map((item) => item.pageLabel || PAGE_LABELS[item.page] || "General"))];
+  const orderedLabels = labelOrder.filter((label) => presentLabels.includes(label));
+  // Add any labels not in PAGE_LABELS (safety net)
+  presentLabels.forEach((label) => { if (!orderedLabels.includes(label)) orderedLabels.push(label); });
+
+  // Render filter buttons
+  if (filtersContainer && orderedLabels.length > 1) {
+    filtersContainer.innerHTML = [
+      `<button class="rec-filter-btn rec-filter-active" data-filter="all" type="button">All <span class="rec-filter-count">${recommendations.length}</span></button>`,
+      ...orderedLabels.map((label) => {
+        const count = recommendations.filter((item) => (item.pageLabel || PAGE_LABELS[item.page] || "General") === label).length;
+        return `<button class="rec-filter-btn" data-filter="${escapeAttribute(label)}" type="button">${escapeHtml(label)} <span class="rec-filter-count">${count}</span></button>`;
+      })
+    ].join("");
+
+    filtersContainer.querySelectorAll(".rec-filter-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        filtersContainer.querySelectorAll(".rec-filter-btn").forEach((b) => b.classList.remove("rec-filter-active"));
+        btn.classList.add("rec-filter-active");
+        const activeFilter = btn.dataset.filter;
+        container.querySelectorAll(".rec-card").forEach((card) => {
+          const cardLabel = card.dataset.pageLabel || "";
+          card.classList.toggle("rec-hidden", activeFilter !== "all" && cardLabel !== activeFilter);
+        });
+        // Update visible count label
+        const visibleCount = activeFilter === "all"
+          ? recommendations.length
+          : recommendations.filter((item) => (item.pageLabel || PAGE_LABELS[item.page] || "General") === activeFilter).length;
+        container.dataset.visibleCount = String(visibleCount);
+      });
+    });
+  } else if (filtersContainer) {
+    filtersContainer.innerHTML = "";
   }
 
   container.className = "recommendation-list";
@@ -2078,7 +2118,7 @@ function renderRecommendations(recommendations) {
     const sourceLabel = item.sourceLabel || (item.type === "automatic" ? "Automatic inspection" : "Manual review");
 
     return `
-    <article class="rec-card rec-card-detailed">
+    <article class="rec-card rec-card-detailed" data-page-label="${escapeAttribute(pageName)}">
       <div class="rec-head">
         <div class="rec-head-main">
           ${destinationUrl
