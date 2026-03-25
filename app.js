@@ -49,6 +49,12 @@ const PAGE_LABELS = {
   thankyou: "Thank you page"
 };
 
+const RECOMMENDATION_GROUP_ORDER = ["home", "category", "product", "cart", "checkout", "thankyou", "general"];
+const RECOMMENDATION_GROUP_LABELS = RECOMMENDATION_GROUP_ORDER.reduce((acc, key) => {
+  acc[key] = PAGE_LABELS[key] || key;
+  return acc;
+}, {});
+
 const DEFAULT_AD_CONFIG = {
   slots: {
     hero: {
@@ -678,11 +684,7 @@ async function runAnalysis() {
     requiredElementsAudit.recommendations.forEach((rec) => recommendations.push(rec));
 
     const cleanedRecommendations = dedupeRecommendations(recommendations);
-    cleanedRecommendations.sort((a, b) => {
-      const impactDelta = impactRank(b.impactLabel) - impactRank(a.impactLabel);
-      if (impactDelta !== 0) return impactDelta;
-      return (b.priority || 0) - (a.priority || 0);
-    });
+    cleanedRecommendations.sort(compareRecommendations);
     const recommendationLimit = Number.POSITIVE_INFINITY;
     const topRecommendations = cleanedRecommendations.slice(0, recommendationLimit);
 
@@ -2060,65 +2062,47 @@ function renderInspectionQuality(report) {
 
 function renderRecommendations(recommendations) {
   const container = document.getElementById("recommendations");
-  const filtersContainer = document.getElementById("recFilters");
-
   if (!recommendations.length) {
     container.className = "recommendation-list empty-state";
     container.textContent = "No recommendations yet.";
-    if (filtersContainer) filtersContainer.innerHTML = "";
     return;
   }
 
-  // Build ordered unique page labels (preserve display order from PAGE_LABELS)
-  const labelOrder = Object.values(PAGE_LABELS);
-  const presentLabels = [...new Set(recommendations.map((item) => item.pageLabel || PAGE_LABELS[item.page] || "General"))];
-  const orderedLabels = labelOrder.filter((label) => presentLabels.includes(label));
-  // Add any labels not in PAGE_LABELS (safety net)
-  presentLabels.forEach((label) => { if (!orderedLabels.includes(label)) orderedLabels.push(label); });
+  const sortedRecommendations = [...recommendations].sort(compareRecommendations);
+  const groupedRecommendations = groupRecommendationsByPage(sortedRecommendations);
 
-  // Render filter buttons
-  if (filtersContainer && orderedLabels.length > 1) {
-    filtersContainer.innerHTML = [
-      `<button class="rec-filter-btn rec-filter-active" data-filter="all" type="button">All <span class="rec-filter-count">${recommendations.length}</span></button>`,
-      ...orderedLabels.map((label) => {
-        const count = recommendations.filter((item) => (item.pageLabel || PAGE_LABELS[item.page] || "General") === label).length;
-        return `<button class="rec-filter-btn" data-filter="${escapeAttribute(label)}" type="button">${escapeHtml(label)} <span class="rec-filter-count">${count}</span></button>`;
-      })
-    ].join("");
-
-    filtersContainer.querySelectorAll(".rec-filter-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        filtersContainer.querySelectorAll(".rec-filter-btn").forEach((b) => b.classList.remove("rec-filter-active"));
-        btn.classList.add("rec-filter-active");
-        const activeFilter = btn.dataset.filter;
-        container.querySelectorAll(".rec-card").forEach((card) => {
-          const cardLabel = card.dataset.pageLabel || "";
-          card.classList.toggle("rec-hidden", activeFilter !== "all" && cardLabel !== activeFilter);
-        });
-        // Update visible count label
-        const visibleCount = activeFilter === "all"
-          ? recommendations.length
-          : recommendations.filter((item) => (item.pageLabel || PAGE_LABELS[item.page] || "General") === activeFilter).length;
-        container.dataset.visibleCount = String(visibleCount);
-      });
-    });
-  } else if (filtersContainer) {
-    filtersContainer.innerHTML = "";
-  }
-
-  container.className = "recommendation-list";
-  container.innerHTML = recommendations.map((item, index) => {
-    const issueText = getIssueText(item);
-    const solutionText = getSolutionText(item);
-    const destinationUrl = getRecommendationDestination(item, STATE.latestReport?.pageResults || []);
-    const pageName = item.pageLabel || PAGE_LABELS[item.page] || "Relevant page";
-    const linkLabel = `${index + 1}. ${item.title}`;
-    const linkHint = destinationUrl ? `Open ${pageName} · ${shortDisplayUrl(destinationUrl)}` : `Open ${pageName} · No matching page URL configured`;
-    const confidence = item.confidence || (item.type === "automatic" ? "Medium" : "Low");
-    const sourceLabel = item.sourceLabel || (item.type === "automatic" ? "Automatic inspection" : "Manual review");
-
+  container.className = "recommendation-list recommendation-groups";
+  container.innerHTML = groupedRecommendations.map((group) => {
+    const cards = group.items.map((item, index) => renderRecommendationCard(item, group.startIndex + index));
     return `
-    <article class="rec-card rec-card-detailed" data-page-label="${escapeAttribute(pageName)}">
+      <section class="recommendation-group" data-page-group="${escapeAttribute(group.page)}">
+        <div class="recommendation-group-header">
+          <div>
+            <h3>${escapeHtml(group.label)}</h3>
+            <p>${group.items.length} recommendation${group.items.length === 1 ? "" : "s"}</p>
+          </div>
+          <span class="tag info">${group.items.length}</span>
+        </div>
+        <div class="recommendation-group-list">
+          ${cards.join("")}
+        </div>
+      </section>
+    `;
+  }).join("");
+}
+
+function renderRecommendationCard(item, index) {
+  const issueText = getIssueText(item);
+  const solutionText = getSolutionText(item);
+  const destinationUrl = getRecommendationDestination(item, STATE.latestReport?.pageResults || []);
+  const pageName = item.pageLabel || PAGE_LABELS[item.page] || "Relevant page";
+  const linkLabel = `${index + 1}. ${item.title}`;
+  const linkHint = destinationUrl ? `Open ${pageName} · ${shortDisplayUrl(destinationUrl)}` : `Open ${pageName} · No matching page URL configured`;
+  const confidence = item.confidence || (item.type === "automatic" ? "Medium" : "Low");
+  const sourceLabel = item.sourceLabel || (item.type === "automatic" ? "Automatic inspection" : "Manual review");
+
+  return `
+    <article class="rec-card rec-card-detailed">
       <div class="rec-head">
         <div class="rec-head-main">
           ${destinationUrl
@@ -2148,7 +2132,58 @@ function renderRecommendations(recommendations) {
       </div>
     </article>
   `;
-  }).join("");
+}
+
+function groupRecommendationsByPage(recommendations) {
+  const groups = new Map();
+
+  recommendations.forEach((item) => {
+    const page = getNormalizedRecommendationPage(item);
+    if (!groups.has(page)) {
+      groups.set(page, {
+        page,
+        label: RECOMMENDATION_GROUP_LABELS[page] || item.pageLabel || PAGE_LABELS[page] || "Relevant page",
+        items: []
+      });
+    }
+    groups.get(page).items.push({
+      ...item,
+      page,
+      pageLabel: item.pageLabel || PAGE_LABELS[page] || RECOMMENDATION_GROUP_LABELS[page] || "Relevant page"
+    });
+  });
+
+  let runningIndex = 0;
+  return [...groups.values()]
+    .sort((a, b) => recommendationGroupRank(a.page) - recommendationGroupRank(b.page))
+    .map((group) => {
+      const enrichedGroup = { ...group, startIndex: runningIndex };
+      runningIndex += group.items.length;
+      return enrichedGroup;
+    });
+}
+
+function getNormalizedRecommendationPage(item) {
+  return item?.page || normalizePageType(item?.pageLabel) || guessPageFromText(item?.title || item?.detail || "") || "general";
+}
+
+function recommendationGroupRank(page) {
+  const normalizedPage = normalizePageType(page) || "general";
+  const index = RECOMMENDATION_GROUP_ORDER.indexOf(normalizedPage);
+  return index === -1 ? RECOMMENDATION_GROUP_ORDER.length : index;
+}
+
+function compareRecommendations(a, b) {
+  const groupDelta = recommendationGroupRank(getNormalizedRecommendationPage(a)) - recommendationGroupRank(getNormalizedRecommendationPage(b));
+  if (groupDelta !== 0) return groupDelta;
+
+  const impactDelta = impactRank(b.impactLabel) - impactRank(a.impactLabel);
+  if (impactDelta !== 0) return impactDelta;
+
+  const priorityDelta = (b.priority || 0) - (a.priority || 0);
+  if (priorityDelta !== 0) return priorityDelta;
+
+  return String(a.title || "").localeCompare(String(b.title || ""));
 }
 
 function hydrateReportLinks(report) {
