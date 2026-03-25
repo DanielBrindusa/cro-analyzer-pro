@@ -3591,7 +3591,7 @@ function downloadPdfReport(report) {
     "",
     "Top recommendations:"
   ].filter(Boolean);
-  (report.recommendations || []).slice(0, 12).forEach((item, index) => {
+  (report.recommendations || []).forEach((item, index) => {
     lines.push(`${index + 1}. ${item.title}`);
     lines.push(`Issue: ${getIssueText(item)}`);
     lines.push(`Solution: ${getSolutionText(item)}`);
