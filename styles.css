@@ -916,6 +916,33 @@ canvas{
   gap:18px;
 }
 
+.recommendation-group-controls{
+  display:flex;
+  justify-content:flex-end;
+  flex-wrap:wrap;
+  gap:10px;
+}
+
+.recommendation-control-btn{
+  appearance:none;
+  border:1px solid var(--line);
+  background:rgba(255,255,255,.05);
+  color:var(--text);
+  border-radius:999px;
+  padding:10px 14px;
+  font:inherit;
+  font-size:13px;
+  font-weight:600;
+  cursor:pointer;
+  transition:transform .18s ease, background .18s ease, border-color .18s ease;
+}
+
+.recommendation-control-btn:hover{
+  background:rgba(255,255,255,.09);
+  border-color:rgba(255,255,255,.2);
+  transform:translateY(-1px);
+}
+
 .recommendation-group{
   display:grid;
   gap:14px;
@@ -925,13 +952,35 @@ canvas{
   background:rgba(255,255,255,.03);
 }
 
+.recommendation-group-collapsible{
+  padding:0;
+  overflow:hidden;
+}
+
+.recommendation-group-collapsible > summary{
+  list-style:none;
+}
+
+.recommendation-group-collapsible > summary::-webkit-details-marker{
+  display:none;
+}
+
 .recommendation-group-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  padding:18px;
+  cursor:pointer;
+}
+
+.recommendation-group-header-main{
+  min-width:0;
   display:flex;
   align-items:flex-start;
   justify-content:space-between;
   gap:12px;
-  padding-bottom:12px;
-  border-bottom:1px solid var(--line);
+  flex:1;
 }
 
 .recommendation-group-header h3{
@@ -946,7 +995,65 @@ canvas{
   font-size:13px;
 }
 
+.recommendation-group-chevron{
+  position:relative;
+  flex:0 0 auto;
+  width:14px;
+  height:14px;
+  margin-top:2px;
+  transition:transform .2s ease;
+}
+
+.recommendation-group-chevron::before,
+.recommendation-group-chevron::after{
+  content:"";
+  position:absolute;
+  top:6px;
+  width:9px;
+  height:2px;
+  border-radius:999px;
+  background:currentColor;
+}
+
+.recommendation-group-chevron::before{
+  left:0;
+  transform:rotate(45deg);
+  transform-origin:left center;
+}
+
+.recommendation-group-chevron::after{
+  right:0;
+  transform:rotate(-45deg);
+  transform-origin:right center;
+}
+
+.recommendation-group-collapsible[open] .recommendation-group-chevron{
+  transform:rotate(180deg);
+}
+
 .recommendation-group-list{
   display:grid;
   gap:16px;
+  padding:0 18px 18px;
+  border-top:1px solid var(--line);
+}
+
+@media (max-width: 700px){
+  .recommendation-group-header-main{
+    flex-direction:column;
+    align-items:flex-start;
+  }
+
+  .recommendation-group-header{
+    align-items:flex-start;
+  }
+
+  .recommendation-group-controls{
+    justify-content:stretch;
+  }
+
+  .recommendation-control-btn{
+    flex:1 1 160px;
+    text-align:center;
+  }
 }

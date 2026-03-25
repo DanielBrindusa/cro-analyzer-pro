@@ -10,7 +10,8 @@ const STATE = {
   errorAudio: null,
   errorAudioUnlocked: false,
   completionSoundPlayed: false,
-  timeoutSoundPlayed: false
+  timeoutSoundPlayed: false,
+  recommendationGroupOpenState: {}
 };
 
 const PRO_PAYMENT_LINK = "REPLACE_WITH_YOUR_STRIPE_PAYMENT_LINK";
@@ -2240,25 +2241,85 @@ function renderRecommendations(recommendations) {
 
   const sortedRecommendations = [...recommendations].sort(compareRecommendations);
   const groupedRecommendations = groupRecommendationsByPage(sortedRecommendations);
+  const groupControls = groupedRecommendations.length > 1 ? `
+    <div class="recommendation-group-controls" aria-label="Recommendation group controls">
+      <button type="button" class="recommendation-control-btn" data-recommendation-action="expand-all">Expand all</button>
+      <button type="button" class="recommendation-control-btn" data-recommendation-action="collapse-all">Collapse all</button>
+    </div>
+  ` : "";
 
   container.className = "recommendation-list recommendation-groups";
-  container.innerHTML = groupedRecommendations.map((group) => {
+  container.innerHTML = `${groupControls}${groupedRecommendations.map((group) => {
     const cards = group.items.map((item, index) => renderRecommendationCard(item, group.startIndex + index));
+    const isOpen = getRecommendationGroupOpenState(group.page);
     return `
-      <section class="recommendation-group" data-page-group="${escapeAttribute(group.page)}">
-        <div class="recommendation-group-header">
-          <div>
-            <h3>${escapeHtml(group.label)}</h3>
-            <p>${group.items.length} recommendation${group.items.length === 1 ? "" : "s"}</p>
+      <details class="recommendation-group recommendation-group-collapsible" data-page-group="${escapeAttribute(group.page)}" ${isOpen ? "open" : ""}>
+        <summary class="recommendation-group-header">
+          <div class="recommendation-group-header-main">
+            <div>
+              <h3>${escapeHtml(group.label)}</h3>
+              <p>${group.items.length} recommendation${group.items.length === 1 ? "" : "s"}</p>
+            </div>
+            <span class="tag info">${group.items.length}</span>
           </div>
-          <span class="tag info">${group.items.length}</span>
-        </div>
+          <span class="recommendation-group-chevron" aria-hidden="true"></span>
+        </summary>
         <div class="recommendation-group-list">
           ${cards.join("")}
         </div>
-      </section>
+      </details>
     `;
-  }).join("");
+  }).join("")}`;
+
+  bindRecommendationGroupInteractions(container);
+}
+
+function getRecommendationGroupOpenState(page) {
+  if (!page) return true;
+  if (!(page in STATE.recommendationGroupOpenState)) {
+    STATE.recommendationGroupOpenState[page] = true;
+  }
+  return !!STATE.recommendationGroupOpenState[page];
+}
+
+function bindRecommendationGroupInteractions(container) {
+  if (!container || container.dataset.recommendationAccordionBound === "true") return;
+
+  container.addEventListener("toggle", (event) => {
+    const group = event.target.closest(".recommendation-group-collapsible");
+    if (!group || !container.contains(group)) return;
+    const page = group.dataset.pageGroup;
+    if (page) {
+      STATE.recommendationGroupOpenState[page] = group.open;
+    }
+  }, true);
+
+  container.addEventListener("click", (event) => {
+    const actionButton = event.target.closest("[data-recommendation-action]");
+    if (!actionButton || !container.contains(actionButton)) return;
+
+    const action = actionButton.dataset.recommendationAction;
+    const groups = Array.from(container.querySelectorAll(".recommendation-group-collapsible"));
+    if (!groups.length) return;
+
+    if (action === "expand-all") {
+      groups.forEach((group) => {
+        group.open = true;
+        const page = group.dataset.pageGroup;
+        if (page) STATE.recommendationGroupOpenState[page] = true;
+      });
+    }
+
+    if (action === "collapse-all") {
+      groups.forEach((group) => {
+        group.open = false;
+        const page = group.dataset.pageGroup;
+        if (page) STATE.recommendationGroupOpenState[page] = false;
+      });
+    }
+  });
+
+  container.dataset.recommendationAccordionBound = "true";
 }
 
 function renderRecommendationCard(item, index) {
@@ -3742,646 +3803,45 @@ function downloadStoredReportPdf(reportId) {
   downloadPdfReport(report);
 }
 
-function sanitizePdfText(value) {
-  return String(value == null ? "" : value)
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/[•]/g, '-')
-    .replace(/[–—]/g, '-')
-    .replace(/[ ]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function getPdfReportPreparedData(report) {
-  const hydratedReport = hydrateReportLinks(JSON.parse(JSON.stringify(report || {})));
-  const recommendations = [...(hydratedReport.recommendations || [])].sort(compareRecommendations);
-  const groups = groupRecommendationsByPage(recommendations);
-  const revenueOpportunity = hydratedReport.revenueOpportunity || estimateRevenueOpportunity(
-    hydratedReport.overallScore,
-    hydratedReport.criticalIssues,
-    hydratedReport.pagesAnalyzed
-  );
-
-  return {
-    report: hydratedReport,
-    recommendations,
-    groups,
-    revenueOpportunity
-  };
-}
-
-function drawPdfHeader(doc, title, subtitle) {
-  const pageWidth = doc.internal.pageSize.getWidth();
-  doc.setFillColor(15, 23, 42);
-  doc.rect(0, 0, pageWidth, 32, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(20);
-  doc.text(sanitizePdfText(title), 14, 15);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.text(sanitizePdfText(subtitle), 14, 23);
-  doc.setDrawColor(203, 213, 225);
-  doc.setLineWidth(0.4);
-  doc.line(14, 35, pageWidth - 14, 35);
-  doc.setTextColor(33, 37, 41);
-}
-
-function drawPdfFooter(doc) {
-  const pageCount = doc.internal.getNumberOfPages();
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-
-  for (let page = 1; page <= pageCount; page += 1) {
-    doc.setPage(page);
-    doc.setDrawColor(226, 232, 240);
-    doc.setLineWidth(0.3);
-    doc.line(14, pageHeight - 14, pageWidth - 14, pageHeight - 14);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    doc.setTextColor(100, 116, 139);
-    doc.text('CRO Website Analyzer Report', 14, pageHeight - 8);
-    doc.text(`Page ${page} of ${pageCount}`, pageWidth - 14, pageHeight - 8, { align: 'right' });
-  }
-  doc.setTextColor(33, 37, 41);
-}
-
-function ensurePdfSpace(doc, y, neededHeight, headerTitle, headerSubtitle) {
-  const pageHeight = doc.internal.pageSize.getHeight();
-  if (y + neededHeight <= pageHeight - 22) return y;
-  doc.addPage();
-  drawPdfHeader(doc, headerTitle, headerSubtitle);
-  return 42;
-}
-
-function addPdfWrappedText(doc, text, x, y, maxWidth, lineHeight, options = {}) {
-  const safeText = sanitizePdfText(text);
-  const lines = doc.splitTextToSize(safeText || ' ', maxWidth);
-  const height = Math.max(lineHeight, lines.length * lineHeight);
-  const alignedY = ensurePdfSpace(doc, y, height + (options.bottomGap || 0), options.headerTitle, options.headerSubtitle);
-  doc.text(lines, x, alignedY, options.textOptions || {});
-  return alignedY + height + (options.bottomGap || 0);
-}
-
-function drawPdfStatCard(doc, x, y, w, h, label, value) {
-  doc.setFillColor(248, 250, 252);
-  doc.setDrawColor(226, 232, 240);
-  doc.roundedRect(x, y, w, h, 4, 4, 'FD');
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(100, 116, 139);
-  doc.text(sanitizePdfText(label).toUpperCase(), x + 4, y + 7);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(16);
-  doc.setTextColor(15, 23, 42);
-  doc.text(sanitizePdfText(String(value)), x + 4, y + 16);
-  doc.setTextColor(33, 37, 41);
-}
-
-function drawPdfTag(doc, text, x, y) {
-  const label = sanitizePdfText(text).toUpperCase();
-  const width = Math.min(60, doc.getTextWidth(label) + 10);
-  doc.setFillColor(239, 246, 255);
-  doc.setDrawColor(147, 197, 253);
-  doc.roundedRect(x, y - 4, width, 7, 3, 3, 'FD');
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.setTextColor(30, 64, 175);
-  doc.text(label, x + 5, y);
-  doc.setTextColor(33, 37, 41);
-  return width;
-}
-
 function downloadPdfReport(report) {
   const jsPDF = window.jspdf?.jsPDF;
   if (!jsPDF) {
     alert("PDF library could not be loaded.");
     return;
   }
-
-  hydrateReportLinks(report);
-
-  const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  const margin = { top: 18, right: 14, bottom: 16, left: 14 };
-  const contentWidth = pageWidth - margin.left - margin.right;
-  const theme = {
-    navy: [18, 34, 61],
-    blue: [46, 91, 186],
-    lightBlue: [235, 242, 255],
-    border: [221, 229, 241],
-    text: [37, 43, 55],
-    muted: [102, 112, 133],
-    light: [247, 249, 252],
-    successBg: [232, 247, 239],
-    successText: [30, 112, 72],
-    warnBg: [255, 247, 230],
-    warnText: [143, 92, 0],
-    dangerBg: [254, 236, 236],
-    dangerText: [156, 44, 44],
-    link: [29, 78, 216]
-  };
-
-  let cursorY = margin.top;
-  const tocEntries = [];
-  let tocPageNumber = null;
-
-  const safeProjectName = report.projectName || "CRO Audit Report";
-  const generatedAt = new Date(report.createdAt || Date.now());
-  const inspectionSummary = report.inspectionSummary || buildInspectionSummary(report.pageResults || []);
-  const groupedRecommendations = groupRecommendationsByPage([...(report.recommendations || [])].sort(compareRecommendations));
-  const pageCountLabel = `${report.pagesAnalyzed || (report.pageResults || []).length || 0}`;
-  const revenueOpportunity = `${report.revenueOpportunity || estimateRevenueOpportunity(report.overallScore, report.criticalIssues, report.pagesAnalyzed || (report.pageResults || []).length)}%`;
-  const homePageSpeed = typeof report.homePageSpeed?.score === "number" ? `${report.homePageSpeed.score}/100` : "Not available";
-  const stackApps = Array.isArray(report.stackSummary?.apps) ? report.stackSummary.apps : [];
-  const hostname = safeHostname((report.pageResults || []).find((page) => page?.url)?.url || "");
-
-  function setFill(rgb) { doc.setFillColor(...rgb); }
-  function setDraw(rgb) { doc.setDrawColor(...rgb); }
-  function setText(rgb) { doc.setTextColor(...rgb); }
-
-  function line(y, color = theme.border) {
-    setDraw(color);
-    doc.setLineWidth(0.25);
-    doc.line(margin.left, y, pageWidth - margin.right, y);
-  }
-
-  function startPage() {
-    doc.addPage();
-    cursorY = margin.top;
-    return doc.getNumberOfPages();
-  }
-
-  function ensureSpace(requiredHeight) {
-    if (cursorY + requiredHeight > pageHeight - margin.bottom) {
-      startPage();
-    }
-  }
-
-  function split(text, maxWidth, fontSize = 10, fontStyle = "normal") {
-    doc.setFont("helvetica", fontStyle);
-    doc.setFontSize(fontSize);
-    return doc.splitTextToSize(String(text || ""), maxWidth);
-  }
-
-  function estimateTextHeight(text, maxWidth, fontSize = 10, lineHeight = 4.8, fontStyle = "normal") {
-    const lines = split(text, maxWidth, fontSize, fontStyle);
-    return Math.max(lineHeight, lines.length * lineHeight);
-  }
-
-  function writeText(text, x, y, maxWidth, options = {}) {
-    const fontSize = options.fontSize ?? 10;
-    const fontStyle = options.fontStyle ?? "normal";
-    const lineHeight = options.lineHeight ?? 4.8;
-    const color = options.color || theme.text;
-    const align = options.align || "left";
-    const lines = split(text, maxWidth, fontSize, fontStyle);
-    doc.setFont("helvetica", fontStyle);
-    doc.setFontSize(fontSize);
-    setText(color);
-    doc.text(lines, x, y, { align, maxWidth, baseline: "top" });
-    return lines.length * lineHeight;
-  }
-
-  function addParagraph(text, options = {}) {
-    const fontSize = options.fontSize ?? 10;
-    const lineHeight = options.lineHeight ?? 4.8;
-    const blockWidth = options.width || contentWidth;
-    const height = estimateTextHeight(text, blockWidth, fontSize, lineHeight, options.fontStyle || "normal");
-    ensureSpace(height + (options.marginBottom ?? 2));
-    const consumed = writeText(text, options.x ?? margin.left, cursorY, blockWidth, options);
-    cursorY += consumed + (options.marginBottom ?? 2);
-    return consumed;
-  }
-
-  function addChip(text, x, y, options = {}) {
-    const fontSize = options.fontSize ?? 8.5;
-    const paddingX = options.paddingX ?? 2.8;
-    const paddingY = options.paddingY ?? 1.6;
-    const radius = options.radius ?? 2.6;
-    doc.setFont("helvetica", options.fontStyle || "bold");
-    doc.setFontSize(fontSize);
-    const textWidth = doc.getTextWidth(String(text || ""));
-    const chipWidth = textWidth + (paddingX * 2);
-    const chipHeight = fontSize * 0.55 + (paddingY * 2);
-    setFill(options.fill || theme.lightBlue);
-    setDraw(options.border || theme.lightBlue);
-    doc.roundedRect(x, y, chipWidth, chipHeight, radius, radius, "FD");
-    setText(options.color || theme.blue);
-    doc.text(String(text || ""), x + paddingX, y + paddingY + (fontSize * 0.55), { baseline: "alphabetic" });
-    return { width: chipWidth, height: chipHeight };
-  }
-
-  function addChipRow(chips, options = {}) {
-    const startX = options.x ?? margin.left;
-    const maxWidth = options.width || contentWidth;
-    const gapX = options.gapX ?? 2;
-    const gapY = options.gapY ?? 2;
-    let x = startX;
-    let y = cursorY;
-    let rowHeight = 0;
-    let totalHeight = 0;
-
-    chips.filter(Boolean).forEach((chip) => {
-      const fontSize = chip.fontSize ?? 8.5;
-      doc.setFont("helvetica", chip.fontStyle || "bold");
-      doc.setFontSize(fontSize);
-      const textWidth = doc.getTextWidth(String(chip.text || ""));
-      const chipWidth = textWidth + ((chip.paddingX ?? 2.8) * 2);
-      const chipHeight = fontSize * 0.55 + ((chip.paddingY ?? 1.6) * 2);
-
-      if (x > startX && x + chipWidth > startX + maxWidth) {
-        x = startX;
-        y += rowHeight + gapY;
-        totalHeight += rowHeight + gapY;
-        rowHeight = 0;
-      }
-
-      addChip(chip.text, x, y, chip);
-      x += chipWidth + gapX;
-      rowHeight = Math.max(rowHeight, chipHeight);
-    });
-
-    totalHeight += rowHeight || 0;
-    cursorY = y + rowHeight + (options.marginBottom ?? 0);
-    return totalHeight;
-  }
-
-  function addCard(x, y, width, height, options = {}) {
-    setFill(options.fill || [255, 255, 255]);
-    setDraw(options.border || theme.border);
-    doc.setLineWidth(options.lineWidth ?? 0.3);
-    doc.roundedRect(x, y, width, height, options.radius ?? 4, options.radius ?? 4, "FD");
-  }
-
-  function addMetricCard(x, y, width, label, value, subtitle) {
-    const valueLines = split(value, width - 8, 18, "bold");
-    const subtitleLines = split(subtitle || "", width - 8, 8.5, "normal");
-    const height = 9 + 5 + (valueLines.length * 7) + 4 + (subtitleLines.length * 3.8) + 6;
-    addCard(x, y, width, height, { fill: [255, 255, 255] });
-    writeText(label, x + 4, y + 4, width - 8, { fontSize: 8, fontStyle: "bold", color: theme.muted, lineHeight: 3.8 });
-    writeText(value, x + 4, y + 10, width - 8, { fontSize: 18, fontStyle: "bold", color: theme.navy, lineHeight: 7 });
-    writeText(subtitle || "", x + 4, y + height - 9, width - 8, { fontSize: 8.2, color: theme.muted, lineHeight: 3.8 });
-    return height;
-  }
-
-  function addSectionBanner(title, subtitle, options = {}) {
-    const anchorPage = doc.getNumberOfPages();
-    const id = options.id || slugify(title);
-    if (options.includeInToc) {
-      tocEntries.push({ title, subtitle: subtitle || "", pageNumber: anchorPage, id });
-    }
-
-    ensureSpace(22);
-    setFill(options.fill || theme.lightBlue);
-    setDraw(options.border || theme.border);
-    doc.roundedRect(margin.left, cursorY, contentWidth, 18, 4, 4, "FD");
-    writeText(title, margin.left + 4, cursorY + 4, contentWidth - 8, { fontSize: 15, fontStyle: "bold", color: theme.navy, lineHeight: 6 });
-    if (subtitle) {
-      writeText(subtitle, margin.left + 4, cursorY + 10, contentWidth - 8, { fontSize: 8.8, color: theme.muted, lineHeight: 4 });
-    }
-    cursorY += 22;
-  }
-
-  function addCalloutBox(title, body, options = {}) {
-    const width = options.width || contentWidth;
-    const x = options.x || margin.left;
-    const padding = 4;
-    const titleHeight = estimateTextHeight(title, width - (padding * 2), 9, 4, "bold");
-    const bodyHeight = estimateTextHeight(body, width - (padding * 2), 9, 4.4, "normal");
-    const height = padding + titleHeight + 1 + bodyHeight + padding;
-    ensureSpace(height + (options.marginBottom ?? 2));
-    addCard(x, cursorY, width, height, { fill: options.fill || theme.light });
-    writeText(title, x + padding, cursorY + padding, width - (padding * 2), { fontSize: 9, fontStyle: "bold", color: theme.navy, lineHeight: 4 });
-    writeText(body, x + padding, cursorY + padding + titleHeight + 1, width - (padding * 2), { fontSize: 9, color: theme.text, lineHeight: 4.4 });
-    cursorY += height + (options.marginBottom ?? 2);
-    return height;
-  }
-
-  function addLinkLine(label, url, options = {}) {
-    if (!url) return 0;
-    const x = options.x || margin.left;
-    const y = options.y || cursorY;
-    const labelFontSize = options.fontSize || 9;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(labelFontSize);
-    setText(theme.link);
-    if (typeof doc.textWithLink === "function") {
-      doc.textWithLink(label, x, y, { url });
-    } else {
-      doc.text(label, x, y);
-      if (typeof doc.link === "function") {
-        doc.link(x, y - 3.5, doc.getTextWidth(label), 5, { url });
-      }
-    }
-    const shortUrl = shortDisplayUrl(url);
-    const labelWidth = doc.getTextWidth(label);
-    writeText(shortUrl, x + labelWidth + 3, y - 3.1, Math.max(20, contentWidth - labelWidth - 6), { fontSize: 8.2, color: theme.muted, lineHeight: 3.8 });
-    return 5;
-  }
-
-  function addRecommendationCard(item, index) {
-    const issueText = getIssueText(item);
-    const solutionText = getSolutionText(item);
-    const evidenceText = item.evidence || "";
-    const destinationUrl = getRecommendationDestination(item, report.pageResults || []);
-    const pageName = item.pageLabel || PAGE_LABELS[item.page] || "Relevant page";
-    const sourceLabel = item.sourceLabel || (item.type === "automatic" ? "Automatic inspection" : "Manual review");
-    const confidence = item.confidence || (item.type === "automatic" ? "Medium" : "Low");
-    const innerWidth = contentWidth - 10;
-    const titleHeight = estimateTextHeight(`${index + 1}. ${item.title}`, innerWidth - 26, 11.2, 5, "bold");
-    const issueHeight = Math.max(14, estimateTextHeight(issueText, innerWidth - 8, 9, 4.3, "normal") + 8);
-    const solutionHeight = Math.max(14, estimateTextHeight(solutionText, innerWidth - 8, 9, 4.3, "normal") + 8);
-    const evidenceHeight = evidenceText ? Math.max(12, estimateTextHeight(evidenceText, innerWidth - 8, 8.5, 4, "normal") + 7) : 0;
-    const linkHeight = destinationUrl ? 6 : 0;
-    const metaChipHeight = 7.5;
-    const totalHeight = 7 + titleHeight + 4 + metaChipHeight + 4 + issueHeight + 3 + solutionHeight + (evidenceHeight ? 3 + evidenceHeight : 0) + (linkHeight ? 4 + linkHeight : 0) + 6;
-
-    ensureSpace(totalHeight);
-    addCard(margin.left, cursorY, contentWidth, totalHeight, { fill: [255, 255, 255] });
-
-    const startY = cursorY;
-    writeText(`${index + 1}. ${item.title}`, margin.left + 5, startY + 5, innerWidth - 26, { fontSize: 11.2, fontStyle: "bold", color: theme.navy, lineHeight: 5 });
-
-    const impactTheme = item.impactLabel === "High"
-      ? { fill: theme.dangerBg, color: theme.dangerText, border: theme.dangerBg }
-      : item.impactLabel === "Medium"
-        ? { fill: theme.warnBg, color: theme.warnText, border: theme.warnBg }
-        : { fill: theme.successBg, color: theme.successText, border: theme.successBg };
-    const badgeLabel = `${item.impactLabel || "Low"} impact`;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(8.5);
-    const badgeWidth = doc.getTextWidth(badgeLabel) + 6;
-    addChip(badgeLabel, margin.left + contentWidth - badgeWidth - 5, startY + 5, { ...impactTheme, fontSize: 8.5, paddingX: 3 });
-
-    let localY = startY + 5 + titleHeight + 2;
-    const chips = [
-      { text: pageName, fill: theme.lightBlue, color: theme.blue, border: theme.lightBlue },
-      { text: sourceLabel, fill: theme.light, color: theme.muted, border: theme.border, fontStyle: "normal" },
-      { text: `${confidence} confidence`, fill: theme.light, color: theme.muted, border: theme.border, fontStyle: "normal" }
-    ];
-    const chipStartY = localY;
-    let chipX = margin.left + 5;
-    chips.forEach((chip) => {
-      const result = addChip(chip.text, chipX, chipStartY, chip);
-      chipX += result.width + 2;
-    });
-    localY += metaChipHeight + 2;
-
-    const boxWidth = innerWidth;
-    const issueBoxHeight = Math.max(14, estimateTextHeight(issueText, boxWidth - 8, 9, 4.3, "normal") + 8);
-    addCard(margin.left + 5, localY, boxWidth, issueBoxHeight, { fill: [250, 251, 253], border: theme.border, radius: 3 });
-    writeText("ISSUE", margin.left + 9, localY + 4, boxWidth - 16, { fontSize: 8.5, fontStyle: "bold", color: theme.muted, lineHeight: 4 });
-    writeText(issueText, margin.left + 9, localY + 8, boxWidth - 12, { fontSize: 9, color: theme.text, lineHeight: 4.3 });
-    localY += issueBoxHeight + 3;
-
-    const solutionBoxHeight = Math.max(14, estimateTextHeight(solutionText, boxWidth - 8, 9, 4.3, "normal") + 8);
-    addCard(margin.left + 5, localY, boxWidth, solutionBoxHeight, { fill: [245, 250, 255], border: theme.border, radius: 3 });
-    writeText("SOLUTION", margin.left + 9, localY + 4, boxWidth - 16, { fontSize: 8.5, fontStyle: "bold", color: theme.muted, lineHeight: 4 });
-    writeText(solutionText, margin.left + 9, localY + 8, boxWidth - 12, { fontSize: 9, color: theme.text, lineHeight: 4.3 });
-    localY += solutionBoxHeight;
-
-    if (evidenceText) {
-      localY += 3;
-      const eHeight = Math.max(12, estimateTextHeight(evidenceText, boxWidth - 8, 8.5, 4, "normal") + 7);
-      addCard(margin.left + 5, localY, boxWidth, eHeight, { fill: theme.light, border: theme.border, radius: 3 });
-      writeText("EVIDENCE", margin.left + 9, localY + 4, boxWidth - 16, { fontSize: 8.2, fontStyle: "bold", color: theme.muted, lineHeight: 3.8 });
-      writeText(evidenceText, margin.left + 9, localY + 7.6, boxWidth - 12, { fontSize: 8.5, color: theme.text, lineHeight: 4 });
-      localY += eHeight;
-    }
-
-    if (destinationUrl) {
-      localY += 4;
-      addLinkLine("Open analyzed page", destinationUrl, { x: margin.left + 5, y: localY + 4.2, fontSize: 8.8 });
-    }
-
-    cursorY = startY + totalHeight + 4;
-  }
-
-  function renderFooter(pageNumber, totalPages) {
-    doc.setPage(pageNumber);
-    const y = pageHeight - 9;
-    line(pageHeight - 12.5, theme.border);
-    writeText(safeProjectName, margin.left, y - 2, 80, { fontSize: 8, color: theme.muted, lineHeight: 3.6 });
-    writeText(`Page ${pageNumber} of ${totalPages}`, pageWidth - margin.right, y - 2, 40, { fontSize: 8, color: theme.muted, align: "right", lineHeight: 3.6 });
-  }
-
-  function renderCoverPage() {
-    setFill(theme.navy);
-    doc.rect(0, 0, pageWidth, 52, "F");
-    setFill(theme.lightBlue);
-    doc.circle(pageWidth - 22, 14, 16, "F");
-
-    writeText("CRO WEBSITE AUDIT", margin.left, 18, 100, { fontSize: 10, fontStyle: "bold", color: [255, 255, 255], lineHeight: 4 });
-    writeText(safeProjectName, margin.left, 28, 126, { fontSize: 24, fontStyle: "bold", color: [255, 255, 255], lineHeight: 10 });
-    if (hostname) {
-      writeText(hostname, margin.left, 43, 110, { fontSize: 10.5, color: [222, 231, 249], lineHeight: 4.5 });
-    }
-
-    cursorY = 64;
-
-    const summaryHeight = 34;
-    addCard(margin.left, cursorY, contentWidth, summaryHeight, { fill: [255, 255, 255], border: theme.border, radius: 5 });
-    writeText("Executive snapshot", margin.left + 5, cursorY + 5, 70, { fontSize: 10, fontStyle: "bold", color: theme.navy, lineHeight: 4.5 });
-    writeText(
-      `This report summarizes the current CRO baseline for the analyzed storefront, highlights the highest-priority gaps, and groups recommendations by page type so implementation can be planned faster.`,
-      margin.left + 5,
-      cursorY + 11,
-      contentWidth - 10,
-      { fontSize: 9.2, color: theme.text, lineHeight: 4.4 }
-    );
-    cursorY += summaryHeight + 8;
-
-    const cardGap = 4;
-    const cardWidth = (contentWidth - cardGap) / 2;
-    const row1Height = Math.max(
-      addMetricCard(margin.left, cursorY, cardWidth, "CRO score", `${report.overallScore || 0}/100`, "Public storefront baseline"),
-      addMetricCard(margin.left + cardWidth + cardGap, cursorY, cardWidth, "Critical issues", `${report.criticalIssues || 0}`, "High-priority conversion blockers")
-    );
-    cursorY += row1Height + 4;
-    const row2Height = Math.max(
-      addMetricCard(margin.left, cursorY, cardWidth, "Pages analyzed", pageCountLabel, "Configured pages inspected"),
-      addMetricCard(margin.left + cardWidth + cardGap, cursorY, cardWidth, "Revenue opportunity", revenueOpportunity, "Heuristic upside from fixing the gaps")
-    );
-    cursorY += row2Height + 8;
-
-    addChipRow([
-      { text: `Plan: ${(report.plan || "free").toUpperCase()}`, fill: theme.lightBlue, color: theme.blue, border: theme.lightBlue },
-      { text: `Generated: ${generatedAt.toLocaleDateString()}`, fill: theme.light, color: theme.muted, border: theme.border, fontStyle: "normal" },
-      report.stackSummary?.platform ? { text: `Platform: ${report.stackSummary.platform}`, fill: theme.light, color: theme.muted, border: theme.border, fontStyle: "normal" } : null,
-      typeof report.homePageSpeed?.score === "number" ? { text: `Home speed: ${homePageSpeed}`, fill: theme.light, color: theme.muted, border: theme.border, fontStyle: "normal" } : null
-    ], { marginBottom: 8 });
-
-    if (Array.isArray(report.notes) ? report.notes.length : String(report.notes || "").trim()) {
-      addCalloutBox("Project notes", Array.isArray(report.notes) ? report.notes.join(" · ") : String(report.notes), { marginBottom: 5 });
-    }
-  }
-
-  function renderSummaryPage() {
-    addSectionBanner("Report summary", "Key metrics, inspection quality, and implementation context.", { includeInToc: true, id: "summary" });
-
-    const cardGap = 4;
-    const cardWidth = (contentWidth - (cardGap * 2)) / 3;
-    const rowHeight = Math.max(
-      addMetricCard(margin.left, cursorY, cardWidth, "Inspection confidence", inspectionSummary.reliabilityLabel || "Low", `${inspectionSummary.fetchedPages}/${inspectionSummary.pageCount} pages fetched`),
-      addMetricCard(margin.left + cardWidth + cardGap, cursorY, cardWidth, "Structured data", `${inspectionSummary.structuredDataCount || 0}`, "JSON-LD items detected"),
-      addMetricCard(margin.left + (cardWidth + cardGap) * 2, cursorY, cardWidth, "Extra sources", `${inspectionSummary.assetCount || 0}`, "Linked assets and inline signals used")
-    );
-    cursorY += rowHeight + 7;
-
-    addCalloutBox(
-      "Audit interpretation",
-      report.overallScore >= 80
-        ? "The storefront already shows a strong CRO baseline. Focus on the high-impact opportunities first and use the grouped sections below as an implementation checklist."
-        : report.overallScore >= 60
-          ? "The storefront has a good foundation, but several improvements can still reduce friction and clarify the path to conversion."
-          : "The storefront currently shows multiple conversion gaps. Prioritize the high-impact recommendations and the sections with the highest issue concentration first.",
-      { marginBottom: 4 }
-    );
-
-    const stackText = [
-      report.stackSummary?.platform ? `Detected platform: ${report.stackSummary.platform}.` : "",
-      stackApps.length ? `Detected apps/services: ${stackApps.slice(0, 8).join(", ")}.` : "",
-      report.competitorReport?.overallScore ? `Competitor benchmark score: ${report.competitorReport.overallScore}/100.` : ""
-    ].filter(Boolean).join(" ");
-
-    if (stackText) {
-      addCalloutBox("Technical context", stackText, { marginBottom: 4 });
-    }
-
-    const issueDistribution = groupedRecommendations
-      .map((group) => `${group.label}: ${group.items.length}`)
-      .join(" · ");
-    if (issueDistribution) {
-      addCalloutBox("Issue distribution by page type", issueDistribution, { marginBottom: 4 });
-    }
-
-    const prioritySummary = (report.recommendations || []).slice(0, 5).map((item, index) => `${index + 1}. ${item.title}`).join(" | ");
-    if (prioritySummary) {
-      addCalloutBox("Top priority themes", prioritySummary, { marginBottom: 0 });
-    }
-  }
-
-  function renderAnalyzedPagesPage() {
-    addSectionBanner("Analyzed pages", "Configured URLs, fetch status, and direct page links used in the audit.", { includeInToc: true, id: "pages" });
-
-    const pages = (report.pageResults || []).map((page) => ({
-      label: page.pageLabel || PAGE_LABELS[page.type] || "Page",
-      url: page.url || "",
-      status: page.fetchStatus || "Reviewed",
-      reliability: page.reliability?.label ? `${page.reliability.label} confidence` : ""
-    }));
-
-    if (!pages.length) {
-      addParagraph("No analyzed pages were stored in this report.", { fontSize: 9.5, color: theme.muted });
-      return;
-    }
-
-    pages.forEach((page, index) => {
-      const urlLineCount = split(page.url || "No URL stored", contentWidth - 18, 8.8, "normal").length;
-      const statusLineCount = split(page.status || "", contentWidth - 18, 8.5, "normal").length;
-      const boxHeight = 10 + 5 + Math.max(urlLineCount * 4.1, 4.1) + 5 + Math.max(statusLineCount * 4, 4) + (page.reliability ? 6 : 0) + (page.url ? 7 : 0) + 4;
-      ensureSpace(boxHeight);
-      addCard(margin.left, cursorY, contentWidth, boxHeight, { fill: [255, 255, 255], border: theme.border, radius: 4 });
-      writeText(`${index + 1}. ${page.label}`, margin.left + 5, cursorY + 5, contentWidth - 10, { fontSize: 10.3, fontStyle: "bold", color: theme.navy, lineHeight: 4.5 });
-      writeText(page.url || "No URL stored", margin.left + 5, cursorY + 10, contentWidth - 10, { fontSize: 8.8, color: theme.text, lineHeight: 4.1 });
-      writeText(page.status || "", margin.left + 5, cursorY + 16 + ((urlLineCount - 1) * 4.1), contentWidth - 10, { fontSize: 8.5, color: theme.muted, lineHeight: 4 });
-      if (page.reliability) {
-        addChip(page.reliability, margin.left + 5, cursorY + boxHeight - 10.5, { fill: theme.light, color: theme.muted, border: theme.border, fontSize: 8.2, fontStyle: "normal" });
-      }
-      if (page.url) {
-        addLinkLine("Open page", page.url, { x: pageWidth - margin.right - 42, y: cursorY + boxHeight - 5.2, fontSize: 8.5 });
-      }
-      cursorY += boxHeight + 4;
-    });
-  }
-
-  function renderRecommendationSections() {
-    if (!groupedRecommendations.length) {
-      addSectionBanner("Recommendations", "No recommendations are available in this report.", { includeInToc: true, id: "recommendations" });
-      addParagraph("Run an analysis first to generate recommendations.", { fontSize: 10, color: theme.muted });
-      return;
-    }
-
-    groupedRecommendations.forEach((group) => {
-      startPage();
-      addSectionBanner(group.label, `${group.items.length} recommendation${group.items.length === 1 ? "" : "s"} grouped under this page type.`, {
-        includeInToc: true,
-        id: `group-${slugify(group.page || group.label)}`
-      });
-
-      if (typeof doc.link === "function") {
-        const backLabel = "Back to contents";
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(8.5);
-        setText(theme.link);
-        doc.text(backLabel, pageWidth - margin.right - 28, margin.top + 5.5);
-        doc.link(pageWidth - margin.right - 30, margin.top + 1, 30, 6, { pageNumber: tocPageNumber || 2 });
-      }
-
-      group.items.forEach((item, index) => {
-        addRecommendationCard(item, group.startIndex + index);
-      });
-    });
-  }
-
-  function renderTocPage() {
-    if (tocPageNumber == null) return;
-    doc.setPage(tocPageNumber);
-    cursorY = margin.top;
-    addSectionBanner("Table of contents", "Jump to each report section and recommendation tag group.", { includeInToc: false, fill: [255, 255, 255] });
-    cursorY -= 2;
-    line(cursorY);
-    cursorY += 5;
-
-    const allEntries = [
-      ...tocEntries.filter((entry, index, self) => self.findIndex((candidate) => candidate.id === entry.id) === index)
-    ];
-
-    allEntries.forEach((entry) => {
-      const label = entry.subtitle ? `${entry.title} — ${entry.subtitle}` : entry.title;
-      const labelLines = split(label, contentWidth - 24, 9.5, "normal");
-      const rowHeight = Math.max(7, labelLines.length * 4.1 + 1.5);
-      if (cursorY + rowHeight > pageHeight - margin.bottom) {
-        startPage();
-        doc.setPage(doc.getNumberOfPages());
-        cursorY = margin.top;
-      }
-      writeText(label, margin.left, cursorY, contentWidth - 24, { fontSize: 9.5, color: theme.text, lineHeight: 4.1 });
-      writeText(String(entry.pageNumber), pageWidth - margin.right, cursorY, 12, { fontSize: 9.5, color: theme.navy, fontStyle: "bold", align: "right", lineHeight: 4.1 });
-
-      const entryTop = cursorY;
-      const linkWidth = contentWidth;
-      if (typeof doc.link === "function") {
-        doc.link(margin.left, entryTop - 1, linkWidth, rowHeight, { pageNumber: entry.pageNumber });
-      }
-      line(cursorY + rowHeight + 0.5, [236, 240, 246]);
-      cursorY += rowHeight + 2.5;
-    });
-  }
-
-  renderCoverPage();
-
-  startPage();
-  tocPageNumber = doc.getNumberOfPages();
-
-  startPage();
-  renderSummaryPage();
-
-  startPage();
-  renderAnalyzedPagesPage();
-
-  renderRecommendationSections();
-  renderTocPage();
-
-  const totalPages = doc.getNumberOfPages();
-  for (let i = 1; i <= totalPages; i += 1) {
-    renderFooter(i, totalPages);
-  }
-
-  doc.save(`${slugify(safeProjectName)}-report.pdf`);
+  const doc = new jsPDF();
+  const lines = [
+    report.projectName,
+    `Plan: ${report.plan.toUpperCase()}`,
+    `Public storefront CRO Score: ${report.overallScore}/100`,
+    `Critical issues: ${report.criticalIssues}`,
+    `Pages analyzed: ${report.pagesAnalyzed}`,
+    `Estimated revenue opportunity: ${report.revenueOpportunity || estimateRevenueOpportunity(report.overallScore, report.criticalIssues, report.pagesAnalyzed)}%`,
+    report.stackSummary?.platform ? `Platform: ${report.stackSummary.platform}` : "",
+    report.stackSummary?.apps?.length ? `Apps: ${report.stackSummary.apps.join(', ')}` : "",
+    "",
+    "Top recommendations:"
+  ].filter(Boolean);
+  (report.recommendations || []).forEach((item, index) => {
+    lines.push(`${index + 1}. ${item.title}`);
+    lines.push(`Issue: ${getIssueText(item)}`);
+    lines.push(`Solution: ${getSolutionText(item)}`);
+    lines.push("");
+  });
+  let y = 20;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(18);
+  doc.text(report.projectName, 14, y);
+  y += 10;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  lines.slice(1).forEach((line) => {
+    const wrapped = doc.splitTextToSize(line, 180);
+    if (y > 275) { doc.addPage(); y = 20; }
+    doc.text(wrapped, 14, y);
+    y += (wrapped.length * 6);
+  });
+  doc.save(`${slugify(report.projectName)}-report.pdf`);
 }
 
 function downloadStoredReport(reportId) {
