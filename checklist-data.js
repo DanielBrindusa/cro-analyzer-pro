@@ -1948,7 +1948,7 @@ window.CRO_CHECKLIST = [
     "page": "product",
     "pageLabel": "Product page",
     "section": "Product description",
-    "checkpoint": "The personalization page doesn’t contain any designs to choose from, so customers are unable to personalize their items. https://www.faribaultmill.com/apps/pulse-personalizer/?variantId=41050921533549&handle=frontier-cotton-blanket&quantity=1&returnurl=https%3A%2F%2Fwww.faribaultmill.com%2Fproducts%2Ffrontier-cotton-blanket&sku=1170TWBL%20NAT",
+    "checkpoint": "The personalization page doesn’t contain any designs to choose from, so customers are unable to personalize their items.",
     "impact": null,
     "cost": null,
     "priorityScore": null,
