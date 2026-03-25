@@ -957,21 +957,18 @@ canvas{
   overflow:hidden;
 }
 
-.recommendation-group-collapsible > summary{
-  list-style:none;
-}
-
-.recommendation-group-collapsible > summary::-webkit-details-marker{
-  display:none;
-}
-
 .recommendation-group-header{
+  width:100%;
   display:flex;
   align-items:center;
   justify-content:space-between;
   gap:14px;
   padding:18px;
   cursor:pointer;
+  background:transparent;
+  border:none;
+  color:var(--text);
+  text-align:left;
 }
 
 .recommendation-group-header-main{
@@ -1027,7 +1024,7 @@ canvas{
   transform-origin:right center;
 }
 
-.recommendation-group-collapsible[open] .recommendation-group-chevron{
+.recommendation-group-collapsible.is-open .recommendation-group-chevron{
   transform:rotate(180deg);
 }
 

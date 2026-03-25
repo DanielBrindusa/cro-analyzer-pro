@@ -2253,21 +2253,21 @@ function renderRecommendations(recommendations) {
     const cards = group.items.map((item, index) => renderRecommendationCard(item, group.startIndex + index));
     const isOpen = getRecommendationGroupOpenState(group.page);
     return `
-      <details class="recommendation-group recommendation-group-collapsible" data-page-group="${escapeAttribute(group.page)}" ${isOpen ? "open" : ""}>
-        <summary class="recommendation-group-header">
-          <div class="recommendation-group-header-main">
-            <div>
+      <section class="recommendation-group recommendation-group-collapsible${isOpen ? ' is-open' : ''}" data-page-group="${escapeAttribute(group.page)}">
+        <button type="button" class="recommendation-group-header" data-recommendation-toggle="${escapeAttribute(group.page)}" aria-expanded="${isOpen ? 'true' : 'false'}">
+          <span class="recommendation-group-header-main">
+            <span>
               <h3>${escapeHtml(group.label)}</h3>
               <p>${group.items.length} recommendation${group.items.length === 1 ? "" : "s"}</p>
-            </div>
+            </span>
             <span class="tag info">${group.items.length}</span>
-          </div>
+          </span>
           <span class="recommendation-group-chevron" aria-hidden="true"></span>
-        </summary>
-        <div class="recommendation-group-list">
+        </button>
+        <div class="recommendation-group-list${isOpen ? '' : ' hidden'}" data-recommendation-panel="${escapeAttribute(group.page)}">
           ${cards.join("")}
         </div>
-      </details>
+      </section>
     `;
   }).join("")}`;
 
@@ -2282,41 +2282,50 @@ function getRecommendationGroupOpenState(page) {
   return !!STATE.recommendationGroupOpenState[page];
 }
 
+function setRecommendationGroupState(container, page, shouldOpen) {
+  if (!container || !page) return;
+  const group = container.querySelector(`.recommendation-group-collapsible[data-page-group="${cssEscape(page)}"]`);
+  if (!group) return;
+  const header = group.querySelector('[data-recommendation-toggle]');
+  const panel = group.querySelector('[data-recommendation-panel]');
+  group.classList.toggle('is-open', !!shouldOpen);
+  if (header) header.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+  if (panel) panel.classList.toggle('hidden', !shouldOpen);
+  STATE.recommendationGroupOpenState[page] = !!shouldOpen;
+}
+
 function bindRecommendationGroupInteractions(container) {
   if (!container || container.dataset.recommendationAccordionBound === "true") return;
 
-  container.addEventListener("toggle", (event) => {
-    const group = event.target.closest(".recommendation-group-collapsible");
-    if (!group || !container.contains(group)) return;
-    const page = group.dataset.pageGroup;
-    if (page) {
-      STATE.recommendationGroupOpenState[page] = group.open;
-    }
-  }, true);
-
   container.addEventListener("click", (event) => {
     const actionButton = event.target.closest("[data-recommendation-action]");
-    if (!actionButton || !container.contains(actionButton)) return;
+    if (actionButton && container.contains(actionButton)) {
+      const action = actionButton.dataset.recommendationAction;
+      const groups = Array.from(container.querySelectorAll(".recommendation-group-collapsible"));
+      if (!groups.length) return;
 
-    const action = actionButton.dataset.recommendationAction;
-    const groups = Array.from(container.querySelectorAll(".recommendation-group-collapsible"));
-    if (!groups.length) return;
+      if (action === "expand-all") {
+        groups.forEach((group) => {
+          const page = group.dataset.pageGroup;
+          if (page) setRecommendationGroupState(container, page, true);
+        });
+      }
 
-    if (action === "expand-all") {
-      groups.forEach((group) => {
-        group.open = true;
-        const page = group.dataset.pageGroup;
-        if (page) STATE.recommendationGroupOpenState[page] = true;
-      });
+      if (action === "collapse-all") {
+        groups.forEach((group) => {
+          const page = group.dataset.pageGroup;
+          if (page) setRecommendationGroupState(container, page, false);
+        });
+      }
+      return;
     }
 
-    if (action === "collapse-all") {
-      groups.forEach((group) => {
-        group.open = false;
-        const page = group.dataset.pageGroup;
-        if (page) STATE.recommendationGroupOpenState[page] = false;
-      });
-    }
+    const toggleButton = event.target.closest("[data-recommendation-toggle]");
+    if (!toggleButton || !container.contains(toggleButton)) return;
+    const page = toggleButton.dataset.recommendationToggle;
+    if (!page) return;
+    const isExpanded = toggleButton.getAttribute('aria-expanded') === 'true';
+    setRecommendationGroupState(container, page, !isExpanded);
   });
 
   container.dataset.recommendationAccordionBound = "true";
@@ -3964,6 +3973,13 @@ function escapeAttribute(value) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
 }
+function cssEscape(value) {
+  if (typeof CSS !== "undefined" && CSS && typeof CSS.escape === "function") {
+    return CSS.escape(String(value));
+  }
+  return String(value).replace(/(["\.#:[\],=])/g, "\$1");
+}
+
 
 function escapeHtml(value) {
   return String(value || "")
